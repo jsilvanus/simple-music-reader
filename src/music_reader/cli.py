@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     result = get_backend(args.backend).recognize(doc, opts)
     text = export(result.score, fmt, title=opts.title)
     if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(text, encoding="utf-8")
     else:
         sys.stdout.write(text)

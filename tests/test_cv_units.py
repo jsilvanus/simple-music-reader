@@ -80,3 +80,29 @@ def test_ledger_lines_detected(make_pdf):
     _, ledgers = cvstaff.remove_ledger_lines(res, staves)
     positions = sorted({round(staves[0].position(l.y)) for l in ledgers})
     assert positions == [-4, -2, 10, 12]
+
+
+def test_system_crop_is_limited_to_staff_and_lyrics():
+    from types import SimpleNamespace as NS
+    from music_reader.backends.classical import _system_boxes
+
+    def staff(top):  # spacing 10 px
+        return NS(spacing=10.0, top=top, bottom=top + 40, x0=100, x1=900)
+
+    # two systems 600 px apart: the midpoint box would swallow the prose between them
+    boxes = _system_boxes([[staff(100)], [staff(700)]], (1000, 1000))
+    assert boxes[0][1] == 100 - 35          # 3.5 spacings above the first staff
+    assert boxes[0][3] == 140 + 65          # bottom of staff + 6.5 spacings
+    assert boxes[1][1] == 700 - 35          # 3.5 spacings above, not halfway to the system above
+
+
+def test_short_staff_is_found_next_to_a_full_width_rule():
+    import numpy as np
+    from music_reader.cv.staff import detect_staves
+
+    bw = np.zeros((400, 1000), dtype=np.uint8)
+    bw[40:42, 100:900] = 255                      # heading rule, much wider than the staff
+    for k in range(5):
+        bw[200 + 12 * k : 202 + 12 * k, 100:350] = 255  # short staff, spacing 12 px
+    staves, _ = detect_staves(bw)
+    assert len(staves) == 1 and abs(staves[0].spacing - 12) < 0.5

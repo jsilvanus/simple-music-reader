@@ -79,7 +79,7 @@ def detect_staves(bw: np.ndarray) -> tuple[list[Staff], np.ndarray]:
     rows = line_mask.sum(axis=1, dtype=np.float64) / 255.0
     if rows.max() <= 0:
         return [], line_mask
-    thresh = 0.35 * rows.max()
+    thresh = 0.15 * rows.max()  # staves of very different widths share a page (a full-width rule must not hide a short one)
     centres, thicks = [], []
     y = 0
     while y < h:

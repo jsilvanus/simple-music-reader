@@ -143,6 +143,12 @@ class ClassicalBackend:
         return info, dbg, systems
 
 
+# Vertical limits of a system crop, in staff spacings beyond the outer staff lines: room for ledger-line notes and
+# clefs above, one line of lyrics (plus its descenders) below.
+CROP_ABOVE = 3.5
+CROP_BELOW = 6.5
+
+
 def _assign(comps, staves) -> dict[int, list]:
     """Give every component to the staff it belongs to (barlines may belong to several)."""
     out = {s.uid: [] for s in staves}
@@ -162,8 +168,9 @@ def _assign(comps, staves) -> dict[int, list]:
 
 
 def _system_boxes(groups, shape) -> list[tuple[int, int, int, int]]:
-    """Crop box for each system: full staff width, from halfway to the system above to halfway to the one below
-    (so lyrics under the staff stay with their system)."""
+    """Crop box for each system: full staff width, from halfway to the system above to halfway to the one below,
+    but at most CROP_ABOVE / CROP_BELOW staff spacings beyond the staff, so lyrics under the staff stay with their
+    system while headings and prose between two systems do not."""
     h, w = shape
     boxes = []
     for i, g in enumerate(groups):
@@ -171,8 +178,10 @@ def _system_boxes(groups, shape) -> list[tuple[int, int, int, int]]:
         top, bottom = g[0].top, g[-1].bottom
         prev_b = groups[i - 1][-1].bottom if i else None
         next_t = groups[i + 1][0].top if i + 1 < len(groups) else None
-        y0 = (prev_b + top) / 2 if prev_b is not None else top - 6 * sp
-        y1 = (bottom + next_t) / 2 if next_t is not None else bottom + 9 * sp
+        y0 = (prev_b + top) / 2 if prev_b is not None else top - CROP_ABOVE * sp
+        y1 = (bottom + next_t) / 2 if next_t is not None else bottom + CROP_BELOW * sp
+        y0 = max(y0, top - CROP_ABOVE * sp)
+        y1 = min(y1, bottom + CROP_BELOW * sp)
         x0 = min(s.x0 for s in g) - 3 * sp
         x1 = max(s.x1 for s in g) + 1.5 * sp
         boxes.append((int(max(0, x0)), int(max(0, y0)), int(min(w, x1)), int(min(h, y1))))
