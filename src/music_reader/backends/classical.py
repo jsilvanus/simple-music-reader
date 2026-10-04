@@ -4,6 +4,7 @@ Deterministic, runs locally, no ML. See OMR.md for what it can and cannot read.
 """
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 from ..assemble import build_voice, infer_meter
@@ -139,8 +140,20 @@ class ClassicalBackend:
             systems.append(results)
             info.systems.append(SystemInfo(si, [StaffInfo(s.index, s.lines, s.x0, s.x1, s.spacing, r.clef, r.clef_confirmed)
                                                for s, r in zip(group, results)]))
-        dbg.system_boxes = _system_boxes(groups, gray.shape)
+        dbg.system_boxes = _system_boxes(groups, gray.shape, bw)
         return info, dbg, systems
+
+
+# Vertical limits of a system crop, in staff spacings beyond the outer staff lines: room for ledger-line notes and
+# clefs above, one line of lyrics (plus its descenders) below.
+CROP_ABOVE = 3.5
+CROP_BELOW = 6.5
+CROP_GAP_STAFF = 4.5  # blank rows (in spacings) tolerated between the staff and its lyrics
+CROP_GAP_LYRICS = 1.6  # blank rows (in spacings) that end the lyrics block
+CROP_ABOVE_MIN = 2.0  # spacings above the top line that are always kept (ledger-line notes)
+CROP_LYRICS_END = 5.0  # where, in spacings below the staff, the lyrics normally end
+CROP_NEXT_GAP = 1.0  # spacings kept clear above the next staff when looking for the cut
+CROP_PAD = 0.5  # margin (in spacings) kept below the last ink row
 
 
 def _assign(comps, staves) -> dict[int, list]:
@@ -161,19 +174,86 @@ def _assign(comps, staves) -> dict[int, list]:
     return out
 
 
-def _system_boxes(groups, shape) -> list[tuple[int, int, int, int]]:
-    """Crop box for each system: full staff width, from halfway to the system above to halfway to the one below
-    (so lyrics under the staff stay with their system)."""
+def _ink_bottom(bw, x0: int, x1: int, y_start: int, y_cap: int, sp: float) -> int:
+    """Last ink row of the block hanging below y_start (notes, lyrics): stops at a blank gap (wide until the lyrics
+    start, narrow after) or at y_cap."""
+    rows = (bw[y_start:y_cap, x0:x1] > 0).any(axis=1)
+    last, gap = y_start, 0
+    for i, ink in enumerate(rows):
+        if ink:
+            last, gap = y_start + i, 0
+        else:
+            gap += 1
+            limit = CROP_GAP_STAFF if last < y_start + 2.5 * sp else CROP_GAP_LYRICS
+            if gap > limit * sp:
+                break
+    return last
+
+
+def _ink_top(bw, x0: int, x1: int, y_start: int, y_cap: int, sp: float) -> int:
+    """First row of everything attached to the staff whose top line is y_start (clef, notes, stems, ties, all joined
+    through the staff lines), at least CROP_ABOVE_MIN spacings above it for ledger-line notes. Prose and headings that
+    only stand close above the staff are separate shapes and stay out."""
+    y_end = y_start + int(4 * sp) + 1
+    region = (bw[y_cap:y_end, x0:x1] > 0).astype(np.uint8)
+    n, labels = cv2.connectedComponents(region, connectivity=8)
+    row = labels[y_start - y_cap] if y_start - y_cap < labels.shape[0] else labels[-1]
+    keep = np.unique(row[row > 0])
+    attached = np.isin(labels[: y_start - y_cap + 1], keep)
+    rows = np.nonzero(attached.any(axis=1))[0]
+    first = y_cap + int(rows[0]) if len(rows) else y_start
+    return max(y_cap, min(first, y_start - int(CROP_ABOVE_MIN * sp)))
+
+
+def _system_boxes(groups, shape, bw=None) -> list[tuple[int, int, int, int]]:
+    """Crop box for each system: the full staff width, and vertically the staff plus what hangs on it.
+
+    With the binarised page the box follows the ink: it grows up over clef, high notes and ledger lines, and down over
+    the lyrics until a blank gap, so descenders are never cut and headings or prose further away stay out. Between two
+    systems the cut goes through the middle of the blank gap (or, if the ink touches, through the emptiest row). Without
+    the page the box is limited to CROP_ABOVE / CROP_BELOW spacings beyond the staff (and halfway to the neighbour)."""
     h, w = shape
-    boxes = []
+    xs = [(int(max(0, min(s.x0 for s in g) - 3 * g[0].spacing)), int(min(w, max(s.x1 for s in g) + 1.5 * g[0].spacing)))
+          for g in groups]
+    if bw is None:
+        boxes = []
+        for i, g in enumerate(groups):
+            sp = g[0].spacing
+            top, bottom = g[0].top, g[-1].bottom
+            y0 = (groups[i - 1][-1].bottom + top) / 2 if i else top - CROP_ABOVE * sp
+            y1 = (bottom + groups[i + 1][0].top) / 2 if i + 1 < len(groups) else bottom + CROP_BELOW * sp
+            y0, y1 = max(y0, top - CROP_ABOVE * sp), min(y1, bottom + CROP_BELOW * sp)
+            boxes.append((xs[i][0], int(max(0, y0)), xs[i][1], int(min(h, y1))))
+        return boxes
+    n = len(groups)
+    y0s, y1s = [0] * n, [0] * n
+    sp0 = groups[0][0].spacing
+    y0s[0] = max(0, _ink_top(bw, xs[0][0], xs[0][1], int(groups[0][0].top), max(0, int(groups[0][0].top - 8 * sp0)), sp0)
+                 - int(CROP_PAD * sp0))
     for i, g in enumerate(groups):
-        sp = g[0].spacing
-        top, bottom = g[0].top, g[-1].bottom
-        prev_b = groups[i - 1][-1].bottom if i else None
-        next_t = groups[i + 1][0].top if i + 1 < len(groups) else None
-        y0 = (prev_b + top) / 2 if prev_b is not None else top - 6 * sp
-        y1 = (bottom + next_t) / 2 if next_t is not None else bottom + 9 * sp
-        x0 = min(s.x0 for s in g) - 3 * sp
-        x1 = max(s.x1 for s in g) + 1.5 * sp
-        boxes.append((int(max(0, x0)), int(max(0, y0)), int(min(w, x1)), int(min(h, y1))))
-    return boxes
+        sp, bottom = g[0].spacing, int(g[-1].bottom)
+        x0, x1 = xs[i]
+        pad = int(CROP_PAD * sp)
+        if i + 1 == n:
+            y1s[i] = min(h, _ink_bottom(bw, x0, x1, bottom, min(h, bottom + int(12 * sp)), sp) + pad)
+            continue
+        next_top = int(groups[i + 1][0].top)
+        # Lyrics end about 4.7 spacings below the staff, the next system's clef starts about 1.6 above its staff: look
+        # for the blank rows between them, and cut through the run nearest to where the lyrics end.
+        lo = min(bottom + int(CROP_LYRICS_END * sp * 0.9), next_top - 2)
+        hi = max(lo + 1, next_top - int(CROP_NEXT_GAP * sp))
+        ink = (bw[lo:hi, x0:x1] > 0).sum(axis=1)
+        blank = np.nonzero(ink == 0)[0]
+        if len(blank):
+            runs = np.split(blank, np.nonzero(np.diff(blank) > 1)[0] + 1)
+            run = min(runs, key=lambda r: abs(lo + int(r[0]) - (bottom + CROP_LYRICS_END * sp)))
+            start, end = lo + int(run[0]), lo + int(run[-1]) + 1
+            mid = (start + end) // 2
+            last = _ink_bottom(bw, x0, x1, bottom, max(bottom + 1, start), sp)
+            y1s[i] = min(last + pad, mid)
+            # the next box starts at its own clef / high notes, not at the end of the blank run (prose may lie between)
+            nsp = groups[i + 1][0].spacing
+            y0s[i + 1] = max(end - pad, mid, _ink_top(bw, xs[i + 1][0], xs[i + 1][1], next_top, y1s[i], nsp) - int(CROP_PAD * nsp))
+        else:  # the ink touches everywhere: cut through the emptiest row
+            y1s[i] = y0s[i + 1] = lo + int(np.argmin(ink))
+    return [(xs[i][0], int(max(0, y0s[i])), xs[i][1], int(min(h, y1s[i]))) for i in range(n)]
