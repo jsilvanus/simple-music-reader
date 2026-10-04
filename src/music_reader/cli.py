@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .bundle import write_bundle
 from .backends import BACKENDS, RecognitionOptions, get_backend
 from .crops import write_crops
 from .debug import write_debug
@@ -34,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--debug", metavar="DIR", help="write annotated page images, debug.pdf and diagnostics.txt to DIR")
     p.add_argument("--crops", metavar="DIR", help="write one image per detected system (notation as printed) and crops.json to DIR")
     p.add_argument("--crop-dpi", type=float, help="resolution of the system crops (re-renders vector PDFs)")
+    p.add_argument("--bundle", metavar="DIR", help="write melody.abc, melody.musicxml, score.json, crops/ and manifest.json to DIR (for anno-api)")
     p.add_argument("--staff", type=int, help="1-based staff within each system that carries the melody")
     p.add_argument("--meter", help="time signature, e.g. 3/4 (digits are not read from the image)")
     p.add_argument("--key", help="key, e.g. G or Em (overrides the detected key signature)")
@@ -66,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         write_debug(result, args.debug)
     if args.crops:
         write_crops(result, doc, args.crops, dpi=args.crop_dpi)
+    if args.bundle:
+        write_bundle(result, doc, args.bundle, title=opts.title, crop_dpi=args.crop_dpi or 300)
     for d in result.score.diagnostics:
         if d.severity != "info":
             print(d, file=sys.stderr)
