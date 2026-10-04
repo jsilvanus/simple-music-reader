@@ -1,0 +1,12 @@
+__pycache__/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+debug/
+*.pyc
+.venv/
+# Real church PDFs are copyrighted: never commit them.
+tests/corpus/*.pdf
+tests/corpus/*.jpg
+tests/corpus/*.png
