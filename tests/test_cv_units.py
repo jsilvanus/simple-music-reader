@@ -106,3 +106,27 @@ def test_short_staff_is_found_next_to_a_full_width_rule():
         bw[200 + 12 * k : 202 + 12 * k, 100:350] = 255  # short staff, spacing 12 px
     staves, _ = detect_staves(bw)
     assert len(staves) == 1 and abs(staves[0].spacing - 12) < 0.5
+
+
+def test_system_crops_follow_the_ink_in_tight_layouts():
+    import numpy as np
+    from types import SimpleNamespace as NS
+    from music_reader.backends.classical import _system_boxes
+
+    bw = np.zeros((300, 600), dtype=np.uint8)
+    for top in (100, 200):
+        for k in range(5):
+            bw[top + 10 * k, 100:500] = 255          # staff lines, spacing 10
+        bw[top - 14 : top + 41, 110] = 255           # clef-like stroke standing on the staff
+    bw[158:171, 150:400] = 255                       # lyrics of system 1 ...
+    bw[171:179, 200:204] = 255                       # ... with a descender (the "j")
+    bw[60:70, 150:400] = 255                         # prose well above system 1, must stay out
+
+    def staff(top):
+        return NS(spacing=10.0, top=top, bottom=top + 40, x0=100, x1=500)
+
+    first, second = _system_boxes([[staff(100)], [staff(200)]], bw.shape, bw)
+    assert first[3] >= 179                           # the descender is inside the first crop
+    assert second[1] > 178                           # ... and not repeated at the top of the second
+    assert second[1] <= 200 - 14 + 1                 # the second crop still starts above its clef
+    assert first[1] > 70                             # the prose above stays out
