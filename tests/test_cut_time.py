@@ -39,3 +39,12 @@ def test_common_time_c_glyph_without_cut_stroke_is_not_cut_time():
     mask[17:19, 1:9] = True
     mask[1:19, 1:3] = True
     assert not _is_cut_time(component(mask), sp=5.0)
+
+def test_cut_time_accepts_disconnected_slash_component():
+    # Staff-line removal may leave only the slanted slash as a connected component.
+    mask = np.zeros((46, 14), dtype=bool)
+    for y in range(46):
+        x = round(9 + 0.08 * y)
+        mask[y, max(0, x - 1):min(mask.shape[1], x + 2)] = True
+    assert _is_cut_time(component(mask), sp=10.0)
+
