@@ -5,8 +5,10 @@ from music_reader.cv.symbols import Comp, _is_cut_time
 
 def component(mask):
     ys, xs = np.nonzero(mask)
-    return Comp(1, int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1,
-                int(mask.sum()), mask.astype(bool))
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    cropped = mask[y0:y1, x0:x1].astype(bool)
+    return Comp(1, x0, y0, x1, y1, int(cropped.sum()), cropped)
 
 
 def test_cut_time_has_a_long_central_vertical_stroke():
