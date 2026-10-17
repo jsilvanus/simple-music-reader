@@ -291,17 +291,40 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             header_end = max(a.x1, b.x1)
             idx += 2
     # Temporary targeted diagnostics for time-signature recognition: report nearby
-    # components when the header parser saw a time-like glyph but could not classify it.
+    # components and the shape metrics for any cut-time-sized glyph.
     if res.time_sig_seen and res.time_signature is None:
         nearby = tail[max(0, idx - 2):idx + 5]
         details = []
         for comp in nearby:
-            details.append(
+            detail = (
                 f"id={comp.id} x={(comp.x0 - staff.x0) / sp:.1f}sp "
                 f"y={(comp.cy - staff.lines[2]) / sp:+.1f}sp "
                 f"size={comp.w / sp:.1f}x{comp.h / sp:.1f}sp "
                 f"cut={_is_cut_time(comp, sp)}"
             )
+            if 2.8 * sp <= comp.h <= 4.4 * sp and 0.65 * sp <= comp.w <= 2.2 * sp:
+                x0, x1 = int(0.2 * comp.w), max(int(0.2 * comp.w) + 1, int(0.8 * comp.w))
+                central_run = 0
+                max_drift = max(2, int(round(0.18 * comp.h)))
+                for drift in range(-max_drift, max_drift + 1):
+                    for origin in range(x0, x1):
+                        run = 0
+                        for y in range(comp.h):
+                            x = round(origin + drift * y / max(1, comp.h - 1))
+                            if x0 <= x < x1 and comp.mask[y, x]:
+                                run += 1
+                                central_run = max(central_run, run)
+                            else:
+                                run = 0
+                left = comp.mask[:, :max(1, int(0.3 * comp.w))]
+                right = comp.mask[:, min(comp.w - 1, int(0.78 * comp.w)):]
+                left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
+                right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
+                detail += (
+                    f" metrics=central:{central_run}/{comp.h}"
+                    f",left:{left_run}/{comp.h},right:{right_run}/{comp.h}"
+                )
+            details.append(detail)
         diag("TIME_SIGNATURE_COMPONENTS", "info", "; ".join(details))
 
     content = tail[idx:]
