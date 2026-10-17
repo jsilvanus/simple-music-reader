@@ -472,8 +472,11 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
         right = c.mask[:, min(w - 1, int(0.65 * w)):]
         left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
         right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
-        if (central_run >= 0.2 * h and left_run < 0.4 * h
-                and right_run >= 0.8 * h):
+        # A slanted slash may not have any one column occupied for most
+        # of its height. The traced path is the relevant continuity measure;
+        # the narrow width and sparse edge runs distinguish it from a C body.
+        if (central_run >= 0.8 * h and c.w <= 0.8 * sp
+                and left_run < 0.7 * h and right_run < 0.7 * h):
             return True
 
     # Full glyph: require the C's left spine and a distinct slash through the
