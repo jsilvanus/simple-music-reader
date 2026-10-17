@@ -419,7 +419,10 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
         return False
     central_run = 0
     h, w = c.mask.shape
-    for drift in (-2, -1, 0, 1, 2):
+    # Allow a visibly slanted stroke: drift is the total horizontal movement
+    # over the glyph's height, not a per-row movement.
+    max_drift = max(2, int(round(0.18 * h)))
+    for drift in range(-max_drift, max_drift + 1):
         for origin in range(x0, x1):
             run = 0
             for y in range(h):
