@@ -414,11 +414,21 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
     """
     if not (3.0 * sp <= c.h <= 4.4 * sp and 0.8 * sp <= c.w <= 2.2 * sp):
         return False
-    x0, x1 = int(0.25 * c.w), max(int(0.25 * c.w) + 1, int(0.75 * c.w))
-    central = c.mask[:, x0:x1]
-    if central.size == 0:
+    # A cut-time mark is a C-like glyph crossed by a slash. Requiring both
+    # the left-hand spine of the C and the central slash avoids mistaking a
+    # numeral such as 4 (which can also have a long vertical stroke) for it.
+    central_x0, central_x1 = int(0.25 * c.w), max(int(0.25 * c.w) + 1, int(0.75 * c.w))
+    left_x1 = max(1, int(0.18 * c.w))
+    right_x0 = min(c.w - 1, int(0.82 * c.w))
+    central = c.mask[:, central_x0:central_x1]
+    left = c.mask[:, :left_x1]
+    right = c.mask[:, right_x0:]
+    if central.size == 0 or left.size == 0 or right.size == 0:
         return False
-    return max((longest_run(central[:, x]) for x in range(central.shape[1])), default=0) >= 0.82 * c.h
+    central_run = max((longest_run(central[:, x]) for x in range(central.shape[1])), default=0)
+    left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
+    right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
+    return central_run >= 0.82 * c.h and left_run >= 0.65 * c.h and right_run < 0.65 * c.h
 
 
 def _is_barline(c: Comp, staff: Staff) -> bool:
