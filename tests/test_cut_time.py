@@ -28,7 +28,7 @@ def test_cut_time_accepts_a_slanted_stroke():
     mask[21:23, 1:11] = True
     mask[1:23, 1:3] = True
     for y in range(3, 21):
-        x = round(5 + 0.25 * (y - 3))
+        x = round(4 + 0.18 * (y - 3))
         mask[y, x : x + 2] = True
     assert _is_cut_time(component(mask), sp=5.5)
 
