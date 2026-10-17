@@ -44,7 +44,7 @@ def test_cut_time_accepts_disconnected_slash_component():
     # Staff-line removal may leave only the slanted slash as a connected component.
     mask = np.zeros((46, 14), dtype=bool)
     for y in range(46):
-        x = round(9 + 0.08 * y)
+        x = round(9 + 0.04 * y)
         mask[y, max(0, x - 1):min(mask.shape[1], x + 2)] = True
-    assert _is_cut_time(component(mask), sp=10.0)
+    assert _is_cut_time(component(mask), sp=11.0)
 
