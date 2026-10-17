@@ -17,7 +17,7 @@ def test_cut_time_has_a_long_central_vertical_stroke():
     mask[1:3, 1:9] = True
     mask[17:19, 1:9] = True
     mask[1:19, 1:3] = True
-    mask[:, 4:6] = True  # the cut-time stroke
+    mask[2:18, 4:6] = True  # the cut-time stroke
     assert _is_cut_time(component(mask), sp=5.0)
 
 
