@@ -420,11 +420,11 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
     central_run = 0
     h, w = c.mask.shape
     for drift in (-2, -1, 0, 1, 2):
-        for origin in range(w):
+        for origin in range(x0, x1):
             run = 0
             for y in range(h):
                 x = round(origin + drift * y / max(1, h - 1))
-                if 0 <= x < w and c.mask[y, x]:
+                if x0 <= x < x1 and c.mask[y, x]:
                     run += 1
                     central_run = max(central_run, run)
                 else:
