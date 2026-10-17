@@ -21,6 +21,18 @@ def test_cut_time_has_a_long_central_vertical_stroke():
     assert _is_cut_time(component(mask), sp=5.0)
 
 
+
+def test_cut_time_accepts_a_slanted_stroke():
+    mask = np.zeros((24, 12), dtype=bool)
+    mask[1:3, 1:11] = True
+    mask[21:23, 1:11] = True
+    mask[1:23, 1:3] = True
+    for y in range(3, 21):
+        x = round(5 + 0.25 * (y - 3))
+        mask[y, x : x + 2] = True
+    assert _is_cut_time(component(mask), sp=5.5)
+
+
 def test_common_time_c_glyph_without_cut_stroke_is_not_cut_time():
     mask = np.zeros((20, 10), dtype=bool)
     mask[1:3, 1:9] = True
