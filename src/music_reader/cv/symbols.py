@@ -406,29 +406,38 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
 
 
 def _is_cut_time(c: Comp, sp: float) -> bool:
-    """Recognize a cut-time glyph by its long, central vertical stroke.
+    """Recognize the C-like alla breve glyph crossed by a near-vertical stroke."""
+    if not (2.8 * sp <= c.h <= 4.4 * sp and 0.65 * sp <= c.w <= 2.2 * sp):
+        return False
 
-    This is deliberately conservative: numeric time signatures continue through the
-    existing generic path unless the component has a near-full-height stroke in its
-    central region.
-    """
-    if not (3.0 * sp <= c.h <= 4.4 * sp and 0.8 * sp <= c.w <= 2.2 * sp):
+    # The scan may make the glyph narrow, and the slash need not occupy one
+    # perfectly vertical pixel column. Look for a near-vertical path through
+    # the central area rather than requiring one column to be continuous.
+    x0, x1 = int(0.2 * c.w), max(int(0.2 * c.w) + 1, int(0.8 * c.w))
+    central = c.mask[:, x0:x1]
+    if central.size == 0:
         return False
-    # A cut-time mark is a C-like glyph crossed by a slash. Requiring both
-    # the left-hand spine of the C and the central slash avoids mistaking a
-    # numeral such as 4 (which can also have a long vertical stroke) for it.
-    central_x0, central_x1 = int(0.25 * c.w), max(int(0.25 * c.w) + 1, int(0.75 * c.w))
-    left_x1 = max(1, int(0.18 * c.w))
-    right_x0 = min(c.w - 1, int(0.82 * c.w))
-    central = c.mask[:, central_x0:central_x1]
-    left = c.mask[:, :left_x1]
-    right = c.mask[:, right_x0:]
-    if central.size == 0 or left.size == 0 or right.size == 0:
-        return False
-    central_run = max((longest_run(central[:, x]) for x in range(central.shape[1])), default=0)
+    central_run = 0
+    h, w = c.mask.shape
+    for drift in (-2, -1, 0, 1, 2):
+        for origin in range(w):
+            run = 0
+            for y in range(h):
+                x = round(origin + drift * y / max(1, h - 1))
+                if 0 <= x < w and c.mask[y, x]:
+                    run += 1
+                    central_run = max(central_run, run)
+                else:
+                    run = 0
+
+    # The left spine identifies the C-like body; the right edge must remain
+    # comparatively open. Use wider edge bands because the printed glyph can
+    # be only about one staff-space wide after connected-component extraction.
+    left = c.mask[:, :max(1, int(0.3 * w))]
+    right = c.mask[:, min(w - 1, int(0.78 * w)):]
     left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
     right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
-    return central_run >= 0.82 * c.h and left_run >= 0.65 * c.h and right_run < 0.65 * c.h
+    return central_run >= 0.72 * h and left_run >= 0.55 * h and right_run < 0.72 * h
 
 
 def _is_barline(c: Comp, staff: Staff) -> bool:
