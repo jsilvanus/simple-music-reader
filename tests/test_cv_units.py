@@ -96,6 +96,29 @@ def test_system_crop_is_limited_to_staff_and_lyrics():
     assert boxes[1][1] == 700 - 35          # 3.5 spacings above, not halfway to the system above
 
 
+
+def test_system_crop_keeps_a_second_volta_lyric_line():
+    import numpy as np
+    from types import SimpleNamespace as NS
+    from music_reader.backends.classical import _system_boxes
+
+    bw = np.zeros((420, 600), dtype=np.uint8)
+    for top in (100, 300):
+        for k in range(5):
+            bw[top + 10 * k, 100:500] = 255
+        bw[top - 14 : top + 41, 110] = 255  # clef-like stroke
+    bw[158:164, 150:390] = 255              # first lyric line
+    bw[184:192, 190:430] = 255              # alternate/volta lyric line
+
+    def staff(top):
+        return NS(spacing=10.0, top=top, bottom=top + 40, x0=100, x1=500)
+
+    first, second = _system_boxes([[staff(100)], [staff(300)]], bw.shape, bw)
+    assert first[3] >= 192
+    assert second[1] > 192
+    assert second[1] <= 300 - 14 + 1
+
+
 def test_short_staff_is_found_next_to_a_full_width_rule():
     import numpy as np
     from music_reader.cv.staff import detect_staves
