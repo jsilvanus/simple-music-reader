@@ -477,7 +477,19 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
     right = c.mask[:, min(w - 1, int(0.78 * w)):]
     left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
     right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
-    return central_run >= 0.72 * h and left_run >= 0.55 * h and right_run < 0.72 * h
+    if central_run >= 0.72 * h and left_run >= 0.55 * h and right_run < 0.72 * h:
+        return True
+
+    # Staff-line removal can disconnect the slash from the C-shaped body. In that
+    # case the surviving component is a narrow, tall stroke, usually slanted so
+    # its longest vertical run sits near one edge rather than the centre.
+    slash_only = (
+        central_run >= 0.2 * h
+        and left_run < 0.4 * h
+        and right_run >= 0.8 * h
+        and c.w <= 1.5 * sp
+    )
+    return slash_only
 
 
 def _is_barline(c: Comp, staff: Staff) -> bool:
