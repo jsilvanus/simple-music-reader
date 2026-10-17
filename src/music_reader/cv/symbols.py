@@ -443,21 +443,47 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
 
 
 def _is_cut_time(c: Comp, sp: float) -> bool:
-    """Recognize the C-like alla breve glyph crossed by a near-vertical stroke."""
-    if not (2.8 * sp <= c.h <= 4.4 * sp and 0.65 * sp <= c.w <= 2.2 * sp):
+    """Recognize a C-like alla breve glyph crossed by a near-vertical stroke.
+
+    Staff-line removal can leave either the complete glyph or only its slash as
+    a connected component, so test those shapes separately.
+    """
+    h, w = c.mask.shape
+    if not (2.8 * sp <= c.h <= 4.4 * sp):
         return False
 
-    # The scan may make the glyph narrow, and the slash need not occupy one
-    # perfectly vertical pixel column. Look for a near-vertical path through
-    # the central area rather than requiring one column to be continuous.
-    x0, x1 = int(0.2 * c.w), max(int(0.2 * c.w) + 1, int(0.8 * c.w))
-    central = c.mask[:, x0:x1]
-    if central.size == 0:
+    # A disconnected slash is tall and narrow. Check it before applying the
+    # wider bounds and body-shape checks used for a complete C| glyph.
+    if c.w <= 1.5 * sp:
+        x0, x1 = max(0, int(0.2 * w)), max(1, int(0.8 * w))
+        central_run = 0
+        max_drift = max(2, int(round(0.18 * h)))
+        for drift in range(-max_drift, max_drift + 1):
+            for origin in range(w):
+                run = 0
+                for y in range(h):
+                    x = round(origin + drift * y / max(1, h - 1))
+                    if 0 <= x < w and c.mask[y, x]:
+                        run += 1
+                        central_run = max(central_run, run)
+                    else:
+                        run = 0
+        left = c.mask[:, :max(1, int(0.3 * w))]
+        right = c.mask[:, min(w - 1, int(0.65 * w)):]
+        left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
+        right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
+        if (central_run >= 0.2 * h and left_run < 0.4 * h
+                and right_run >= 0.8 * h):
+            return True
+
+    # Full glyph: require the C's left spine and a distinct slash through the
+    # middle. Keep the central search away from the left spine, or an ordinary
+    # common-time C would satisfy the slash test by itself.
+    if not (0.65 * sp <= c.w <= 2.2 * sp):
         return False
+    x0 = max(1, int(0.35 * w))
+    x1 = max(x0 + 1, int(0.78 * w))
     central_run = 0
-    h, w = c.mask.shape
-    # Allow a visibly slanted stroke: drift is the total horizontal movement
-    # over the glyph's height, not a per-row movement.
     max_drift = max(2, int(round(0.18 * h)))
     for drift in range(-max_drift, max_drift + 1):
         for origin in range(x0, x1):
@@ -470,26 +496,12 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
                 else:
                     run = 0
 
-    # The left spine identifies the C-like body; the right edge must remain
-    # comparatively open. Use wider edge bands because the printed glyph can
-    # be only about one staff-space wide after connected-component extraction.
     left = c.mask[:, :max(1, int(0.3 * w))]
     right = c.mask[:, min(w - 1, int(0.78 * w)):]
     left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
     right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
-    if central_run >= 0.72 * h and left_run >= 0.55 * h and right_run < 0.72 * h:
-        return True
-
-    # Staff-line removal can disconnect the slash from the C-shaped body. In that
-    # case the surviving component is a narrow, tall stroke, usually slanted so
-    # its longest vertical run sits near one edge rather than the centre.
-    slash_only = (
-        central_run >= 0.2 * h
-        and left_run < 0.4 * h
-        and right_run >= 0.8 * h
-        and c.w <= 1.5 * sp
-    )
-    return slash_only
+    return (central_run >= 0.72 * h and left_run >= 0.55 * h
+            and right_run < 0.72 * h)
 
 
 def _is_barline(c: Comp, staff: Staff) -> bool:
