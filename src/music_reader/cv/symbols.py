@@ -290,6 +290,20 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             _mark(res, "time", (min(a.x0, b.x0), a.y0, max(a.x1, b.x1), b.y1), "time signature (digits not read)")
             header_end = max(a.x1, b.x1)
             idx += 2
+    # Temporary targeted diagnostics for time-signature recognition: report nearby
+    # components when the header parser saw a time-like glyph but could not classify it.
+    if res.time_sig_seen and res.time_signature is None:
+        nearby = tail[max(0, idx - 2):idx + 5]
+        details = []
+        for comp in nearby:
+            details.append(
+                f"id={comp.id} x={(comp.x0 - staff.x0) / sp:.1f}sp "
+                f"y={(comp.cy - staff.lines[2]) / sp:+.1f}sp "
+                f"size={comp.w / sp:.1f}x{comp.h / sp:.1f}sp "
+                f"cut={_is_cut_time(comp, sp)}"
+            )
+        diag("TIME_SIGNATURE_COMPONENTS", "info", "; ".join(details))
+
     content = tail[idx:]
 
     # ---- content ------------------------------------------------------------------
