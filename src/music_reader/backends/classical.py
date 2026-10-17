@@ -182,9 +182,17 @@ def _assign(comps, staves) -> dict[int, list]:
     return out
 
 
-def _ink_bottom(bw, x0: int, x1: int, y_start: int, y_cap: int, sp: float) -> int:
-    """Last ink row of the block hanging below y_start (notes, lyrics): stops at a blank gap (wide until the lyrics
-    start, narrow after) or at y_cap."""
+def _ink_bottom(
+    bw, x0: int, x1: int, y_start: int, y_cap: int, sp: float,
+    lyrics_gap: float = CROP_GAP_LYRICS,
+) -> int:
+    """Last ink row hanging below a staff.
+
+    lyrics_gap is configurable because a lyric line may be followed by a second
+    (volta/alternate) line. Between systems we allow a larger gap between lyric
+    lines, while capping the scan above the next staff so its clef cannot be
+    mistaken for more lyrics.
+    """
     rows = (bw[y_start:y_cap, x0:x1] > 0).any(axis=1)
     last, gap = y_start, 0
     for i, ink in enumerate(rows):
@@ -192,7 +200,7 @@ def _ink_bottom(bw, x0: int, x1: int, y_start: int, y_cap: int, sp: float) -> in
             last, gap = y_start + i, 0
         else:
             gap += 1
-            limit = CROP_GAP_STAFF if last < y_start + 2.5 * sp else CROP_GAP_LYRICS
+            limit = CROP_GAP_STAFF if last < y_start + 2.5 * sp else lyrics_gap
             if gap > limit * sp:
                 break
     return last
@@ -246,22 +254,17 @@ def _system_boxes(groups, shape, bw=None) -> list[tuple[int, int, int, int]]:
             y1s[i] = min(h, _ink_bottom(bw, x0, x1, bottom, min(h, bottom + int(12 * sp)), sp) + pad)
             continue
         next_top = int(groups[i + 1][0].top)
-        # Lyrics end about 4.7 spacings below the staff, the next system's clef starts about 1.6 above its staff: look
-        # for the blank rows between them, and cut through the run nearest to where the lyrics end.
-        lo = min(bottom + int(CROP_LYRICS_END * sp * 0.9), next_top - 2)
-        hi = max(lo + 1, next_top - int(CROP_NEXT_GAP * sp))
-        ink = (bw[lo:hi, x0:x1] > 0).sum(axis=1)
-        blank = np.nonzero(ink == 0)[0]
-        if len(blank):
-            runs = np.split(blank, np.nonzero(np.diff(blank) > 1)[0] + 1)
-            run = min(runs, key=lambda r: abs(lo + int(r[0]) - (bottom + CROP_LYRICS_END * sp)))
-            start, end = lo + int(run[0]), lo + int(run[-1]) + 1
-            mid = (start + end) // 2
-            last = _ink_bottom(bw, x0, x1, bottom, max(bottom + 1, start), sp)
-            y1s[i] = min(last + pad, mid)
-            # the next box starts at its own clef / high notes, not at the end of the blank run (prose may lie between)
-            nsp = groups[i + 1][0].spacing
-            y0s[i + 1] = max(end - pad, mid, _ink_top(bw, xs[i + 1][0], xs[i + 1][1], next_top, y1s[i], nsp) - int(CROP_PAD * nsp))
-        else:  # the ink touches everywhere: cut through the emptiest row
-            y1s[i] = y0s[i + 1] = lo + int(np.argmin(ink))
+        # Search the whole lyric area, not just around the nominal end of the first
+        # line: alternate/volta lyrics may occupy a second line several spacings lower.
+        # Stop the scan before the next staff's clef can enter the crop.
+        cap = max(bottom + 1, next_top - int(1.5 * sp))
+        last = _ink_bottom(bw, x0, x1, bottom, cap, sp, lyrics_gap=3.5)
+        cut = min(last + pad, cap)
+        y1s[i] = cut
+        # Start the next crop at its own clef / high notes; never duplicate the
+        # previous system's descenders, even when the lyrics span multiple lines.
+        nsp = groups[i + 1][0].spacing
+        next_ink = _ink_top(bw, xs[i + 1][0], xs[i + 1][1], next_top,
+                            max(0, next_top - int(8 * nsp)), nsp)
+        y0s[i + 1] = max(cut, next_ink - int(CROP_PAD * nsp))
     return [(xs[i][0], int(max(0, y0s[i])), xs[i][1], int(min(h, y1s[i]))) for i in range(n)]
