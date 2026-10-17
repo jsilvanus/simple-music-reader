@@ -28,6 +28,7 @@ class ClassicalBackend:
         key_candidates: list[tuple[int, int, int]] = []  # (fifths, page, system)
         ambiguous_systems = 0
         time_sig_seen = False
+        detected_meters: list[str] = []
         pages = options.pages or list(range(1, len(doc) + 1))
         for pno in pages:
             if not 1 <= pno <= len(doc):
@@ -48,6 +49,8 @@ class ClassicalBackend:
                 score.diagnostics.extend(res.diagnostics)
                 dbg.marks.extend(res.marks)
                 time_sig_seen |= res.time_sig_seen
+                if res.time_signature is not None:
+                    detected_meters.append(res.time_signature)
                 if res.key_fifths is not None:
                     key_candidates.append((res.key_fifths, pno, si))
                 selected.append((res, pno, si))
@@ -81,6 +84,11 @@ class ClassicalBackend:
         # meter
         if options.meter:
             score.meter = Meter.parse(options.meter)
+        elif detected_meters:
+            score.meter = Meter.parse(detected_meters[0])
+            if any(m != detected_meters[0] for m in detected_meters[1:]):
+                score.diagnostics.append(Diagnostic("TIME_SIGNATURE_CHANGE", "warning",
+                    f"time signature differs between systems; the first ({detected_meters[0]}) is used"))
         else:
             score.meter = infer_meter(score.voices[0].measures)
             if score.meter is not None:
