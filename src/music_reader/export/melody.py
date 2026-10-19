@@ -22,6 +22,10 @@ def _event(e: Event) -> dict:
     }
     if e.kind == "note":
         out.update(pitch=e.pitch.name, midi=e.pitch.midi, tie_to_next=e.tie_start)
+        if e.graces:
+            out["grace_notes"] = [g.name for g in e.graces]  # before the note, taking no time
+    if e.tuplet:
+        out["tuplet"] = f"{e.tuplet[0]}:{e.tuplet[1]}"  # "duration" is the sounding length
     return out
 
 

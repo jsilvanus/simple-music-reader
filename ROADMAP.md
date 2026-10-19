@@ -7,10 +7,10 @@ Ordered by what most improves *useful melodies from real church PDFs*.
    embedded fonts of vector files (`PageAnalysis.fonts`).
 2. ~~**Read the time signature.**~~ Done (generated scores only). Digit templates or a small classifier for stacked digits and the common-time sign; compare
    with the inferred meter and flag a disagreement.
-3. **Grace notes, triplets** (slanted beams, beam groups of 3+ and sixteenth beams are done on generated scores) in `cv/symbols.py` (beams are currently
-   read as a count of strokes beside the stem, tested with flat beams only).
-4. ~~**Voices in one staff.**~~ Done for stacked heads (`--voice`, generated scores only). Hymn books often print soprano and alto on one staff (stems up/down, chords). Today a chord is
-   reduced to its top note with a warning; add voice separation by stem direction and a `--voice` option.
+3. ~~**Slanted beams, beam groups of 3+, sixteenth beams, grace notes, triplets**~~ Done on generated scores (single grace notes and 3:2 triplets; other tuplets and beamed grace notes are not)
+   in `cv/symbols.py`.
+4. ~~**Voices in one staff.**~~ Done for stacked heads (`--voice`, generated scores only). Hymn books often print soprano and alto on one staff; stacked heads are split and
+   `--voice` picks one.
 5. **Better melody-staff choice.** Clef is used now; range, lyric lines and stem direction are not. Use clef, range, lyric lines under the staff and stem direction instead of "first staff".
 6. **Vector-first backend.** For vector PDFs read staff lines, barlines and music-font glyphs straight from the PDF objects
    (exact geometry, no thresholds). `Document.analyze` already lists fonts; needs a glyph-to-SMuFL mapping per font.

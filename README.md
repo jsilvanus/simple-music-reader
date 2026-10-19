@@ -44,7 +44,7 @@ Useful options: `--staff N` (which staff of each system carries the melody), `--
 `--voice top|bottom` (which voice of two on one staff), `--dpi`, `--strict` (exit status 2 on error-level
 diagnostics). The printed time signature is read when it is convincing; otherwise the meter is inferred from the measure
 lengths unless you give `--meter`, and a warning says so. `--format melody` writes `melody.json`
-(`music-reader.melody/1`), a small stable document for other programs. Reading is verified on generated scores only.
+(`music-reader.melody/1`), a small stable document for other programs; events carry an optional `tuplet` (`"3:2"`, `duration` is the sounding length) and `grace_notes` (taking no time). Reading is verified on generated scores only.
 
 Warnings go to standard error and, for ABC, into `%` comment lines at the top of the output. Nothing uncertain is
 corrected silently.

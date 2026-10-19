@@ -242,6 +242,8 @@ class Item:
     stem: Optional[str] = None
     flags: int = 0
     notes: list = field(default_factory=list)
+    graces: list = field(default_factory=list)  # grace-note Items leaning on this note
+    tuplet: Optional[tuple] = None  # (actual, normal)
 
 
 @dataclass
@@ -382,6 +384,40 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             comp_heads[owner.id].append(hole)
         else:
             standalone.append(hole)
+    graces: list[Item] = []
+    tri_digits: list[Comp] = []
+    tri_brackets: list[Comp] = []
+
+    def other(c):
+        """A component that holds no note head: accidental, dot, tie, rest, grace note or leftover."""
+        gh = find_grace_head(c, sp) if _classify_rest(c, staff) is None else None  # an eighth rest has a filled dot too
+        if gh is not None:
+            g = _grace_item(staff, c, gh, base, ledgers, res)
+            if g is not None:
+                graces.append(g)
+            return
+        acc = classify_accidental(c, sp)
+        if acc:
+            accs.append((acc, c))
+            return
+        if _is_dot(c, sp):
+            dots.append(c)
+            return
+        if _is_tie(c, sp):
+            ties.append(c)
+            return
+        r = _classify_rest(c, staff)
+        if r is not None:
+            kind, dur = r
+            res.items.append(Item("rest", c.cx, c.bbox, 0.7, c.id, duration=dur, notes=[kind]))
+            _mark(res, "rest", c.bbox, kind, 0.7)
+            return
+        if c.w >= 0.3 * sp and c.h <= 1.3 * sp and c.w >= 1.2 * c.h:
+            frags.append(c)  # maybe a piece of a tie/slur that a staff line cut apart
+            return
+        if staff.top - 0.2 * sp <= c.cy <= staff.bottom + 0.2 * sp and c.h >= 0.8 * sp:
+            diag("UNCLASSIFIED_SYMBOL", "info", f"unrecognised symbol {c.w / sp:.1f}x{c.h / sp:.1f} sp", c)
+            _mark(res, "unknown", c.bbox, "?", 0.0)
     for c in content:
         heads = comp_heads[c.id]
         if heads:
@@ -393,32 +429,19 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
         if any(hh.x0 - 0.2 * sp <= c.x0 and c.x1 <= hh.x1 + 0.2 * sp and hh.y0 - 0.2 * sp <= c.y0 and c.y1 <= hh.y1 + 0.2 * sp
                for hh in standalone):
             continue  # a fragment of a hollow head's broken ring
-        acc = classify_accidental(c, sp)
-        if acc:
-            accs.append((acc, c))
+        if _is_three(c, staff):
+            tri_digits.append(c)  # maybe the 3 of a triplet: decided once the notes are known
             continue
-        if _is_dot(c, sp):
-            dots.append(c)
+        if _is_straight_stroke(c, sp):
+            tri_brackets.append(c)  # maybe a triplet bracket (a tie is curved)
             continue
-        if _is_tie(c, sp):
-            ties.append(c)
-            continue
-        r = _classify_rest(c, staff)
-        if r is not None:
-            kind, dur = r
-            res.items.append(Item("rest", c.cx, c.bbox, 0.7, c.id, duration=dur, notes=[kind]))
-            _mark(res, "rest", c.bbox, kind, 0.7)
-            continue
-        if c.w >= 0.3 * sp and c.h <= 1.3 * sp and c.w >= 1.2 * c.h:
-            frags.append(c)  # maybe a piece of a tie/slur that a staff line cut apart
-            continue
-        if staff.top - 0.2 * sp <= c.cy <= staff.bottom + 0.2 * sp and c.h >= 0.8 * sp:
-            diag("UNCLASSIFIED_SYMBOL", "info", f"unrecognised symbol {c.w / sp:.1f}x{c.h / sp:.1f} sp", c)
-            _mark(res, "unknown", c.bbox, "?", 0.0)
+        other(c)
     for h in standalone:
         it = _make_note(staff, None, h, base, ledgers, res, src)
         if it is not None:
             notes.append(it)
+
+    tri_groups = _triplet_groups(notes + [i for i in res.items if i.kind == "rest"], tri_digits, tri_brackets, sp, other, res)
 
     for kind, c in accs:
         target = _nearest_note(notes, c, sp)
@@ -460,6 +483,19 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
         diag("CHORD_OR_POLYPHONY", "warning",
              f"{columns} column(s) with several note heads (two voices on one staff?); the {which} note is taken as the melody "
              f"(--voice {'bottom' if voice == 'top' else 'top'} reads the other voice)", None)
+    for group in tri_groups:  # three columns sound as two: every duration is two thirds of what is written
+        for col in group:
+            for it in col:
+                if it.duration is not None:
+                    it.duration = it.duration * Fraction(2, 3)
+                    it.tuplet = (3, 2)
+    following = sorted(merged + [i for i in res.items if i.kind == "rest"], key=lambda i: i.x)
+    for g in sorted(graces, key=lambda i: i.x):
+        nxt = next((i for i in following if i.x > g.x + 0.3 * sp), None)
+        if nxt is not None and nxt.kind == "note" and nxt.x - g.x <= 5.0 * sp:
+            nxt.graces.append(g)
+        else:
+            diag("GRACE_NOTE_ORPHAN", "info", "grace note with no note after it; ignored")
     res.items.extend(merged)
     for c in bars:
         if c.x0 < header_end - 0.5 * sp:
@@ -478,6 +514,7 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
 
 
 
+TRIPLET_MIN_SCORE = 0.6  # the digit reader's similarity for a "3" to count as a triplet number
 TIME_MIN_SCORE = 0.65  # mean digit similarity below which a reading is not trusted
 TIME_MIN_MARGIN = 0.003  # lead over the next valid reading
 
@@ -647,11 +684,8 @@ def _is_barline(c: Comp, staff: Staff) -> bool:
     return max(longest_run(c.mask[:, x]) for x in range(c.w)) >= 0.9 * c.h
 
 
-def _dotted(d: Fraction, dots: int) -> Fraction:
-    return d * (2 - Fraction(1, 2**dots))
-
-
-def _make_note(staff: Staff, c: Optional[Comp], h: Head, base: int, ledgers, res: StaffResult, src) -> Optional[Item]:
+def _staff_pos(staff: Staff, h: Head, ledgers, res: StaffResult):
+    """(rounded staff position, exact position) of a head; None when it sits off the staff without the ledger lines it needs."""
     sp = staff.spacing
     pos_f = staff.position(h.cy)
     pos = int(round(pos_f))
@@ -664,6 +698,127 @@ def _make_note(staff: Staff, c: Optional[Comp], h: Head, base: int, ledgers, res
         if not ok:
             _mark(res, "rejected", (h.x0, h.y0, h.x1, h.y1), "no ledger", 0.0)
             return None
+    return pos, pos_f
+
+
+def _dotted(d: Fraction, dots: int) -> Fraction:
+    return d * (2 - Fraction(1, 2**dots))
+
+
+def find_grace_head(c: Comp, sp: float) -> Optional[Head]:
+    """The small filled head of a grace note: a short stem (with a flag and a slash) and a head about two thirds the size
+    of an ordinary one. Stem, flag and slash are thinner than the head and vanish in an opening; what remains is the head."""
+    if not (1.5 * sp <= c.h <= 3.8 * sp and c.w <= 2.6 * sp):
+        return None
+    pad = 3
+    m = np.pad(c.mask.astype(np.uint8) * 255, pad)
+    d = max(3, int(round(0.38 * sp)))
+    opened = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d)))
+    n, lab, stats, cents = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    best = None
+    for i in range(1, n):
+        x, y, w, h, a = (int(v) for v in stats[i])
+        if not (0.5 * sp <= w <= 1.2 * sp and 0.3 * sp <= h <= 0.85 * sp and w >= 0.9 * h):
+            continue
+        if a < 0.55 * w * h or not _head_like_orientation((lab == i).astype(np.uint8)):
+            continue
+        if best is None or a > best[0]:
+            best = (a, Head(c.x0 + cents[i][0] - pad, c.y0 + cents[i][1] - pad, c.x0 + x - pad, c.y0 + y - pad,
+                            c.x0 + x + w - pad, c.y0 + y + h - pad, 1.0))
+    if best is None:
+        return None
+    head = best[1]
+    # a grace note has a stem: ink of the component reaching well beyond the head
+    reach = max(head.y0 - c.y0, c.y1 - head.y1)
+    return head if reach >= 1.0 * sp else None
+
+
+def _grace_item(staff: Staff, c: Comp, h: Head, base: int, ledgers, res: StaffResult) -> Optional[Item]:
+    found = _staff_pos(staff, h, ledgers, res)
+    if found is None:
+        return None
+    pos, pos_f = found
+    it = Item("grace", h.cx, (int(h.x0), int(h.y0), int(h.x1), int(h.y1)), max(0.0, 0.8 - 2.0 * abs(pos_f - pos)), c.id, pos=pos)
+    _mark(res, "grace", c.bbox, "grace", it.conf)
+    return it
+
+
+def _is_three(c: Comp, staff: Staff) -> bool:
+    """A "3" of digit size (the number of a triplet), judged with the digit reader; the staff lines that cross it are bridged."""
+    sp = staff.spacing
+    if not (0.9 * sp <= c.h <= 2.1 * sp and 0.45 * sp <= c.w <= 1.5 * sp):
+        return False
+    canvas = c.mask.copy()
+    t = int(np.ceil(staff.thickness)) + 1
+    bands = [(int(round(y)) - c.y0 - t // 2, int(round(y)) - c.y0 + t // 2) for y in staff.lines if c.y0 - t <= y <= c.y1 + t]
+    bands = [(max(0, b0), min(c.h - 1, b1)) for b0, b1 in bands if b1 >= 0 and b0 <= c.h - 1]
+    _bridge_bands(canvas, bands)
+    ranked = cvdigits.classify_digit(canvas, tuple(bands))
+    return len(ranked) > 1 and ranked[0][0] == "3" and ranked[0][1] >= TRIPLET_MIN_SCORE and ranked[0][1] - ranked[1][1] >= 0.03
+
+
+def _is_straight_stroke(c: Comp, sp: float) -> bool:
+    """A long thin level stroke (the middle of a triplet bracket); a tie or slur is an arc and bends more."""
+    if not (1.0 * sp <= c.w <= 40 * sp and c.h <= 1.2 * sp and c.w >= 2.5 * c.h):
+        return False
+    lo, hi = int(0.2 * c.w), max(int(0.2 * c.w) + 1, int(0.8 * c.w))
+    centres = []
+    for x in range(lo, hi):
+        ys = np.nonzero(c.mask[:, x])[0]
+        if len(ys) == 0:
+            return False
+        centres.append(ys.mean())
+    return max(centres) - min(centres) <= max(1.5, 0.15 * sp)
+
+
+def _triplet_groups(items: list[Item], digits: list[Comp], brackets: list[Comp], sp: float, other, res: StaffResult):
+    """Find the three columns each "3" belongs to. A digit that does not sit beyond the stems of three neighbouring
+    columns is handed back to ``other`` (and read as whatever else it may be); so is a stroke that is no bracket."""
+    columns: list[list[Item]] = []
+    for it in sorted(items, key=lambda i: i.x):
+        if columns and abs(columns[-1][0].x - it.x) <= 0.8 * sp:
+            columns[-1].append(it)
+        else:
+            columns.append([it])
+    groups, used, taken = [], set(), []
+    for d in sorted(digits, key=lambda c: c.x0):
+        best = None
+        for i in range(len(columns) - 2):
+            if used & {i, i + 1, i + 2}:
+                continue
+            xa, xb = columns[i][0].x, columns[i + 2][0].x
+            off = abs(d.cx - (xa + xb) / 2)
+            if off > max(1.2 * sp, 0.35 * (xb - xa)):
+                continue
+            boxes = [it.bbox for k in range(i, i + 3) for it in columns[k]]
+            top, bottom = min(b[1] for b in boxes), max(b[3] for b in boxes)
+            gap = (top - d.cy) if d.cy < top else (d.cy - bottom) if d.cy > bottom else None
+            if gap is None or gap < 0.3 * sp or gap > 6.5 * sp:
+                continue
+            if best is None or off < best[0]:
+                best = (off, i)
+        if best is None:
+            other(d)
+            continue
+        i = best[1]
+        used |= {i, i + 1, i + 2}
+        groups.append([columns[k] for k in range(i, i + 3)])
+        taken.append((d, columns[i][0].x, columns[i + 2][0].x))
+        _mark(res, "tuplet", d.bbox, "3", 1.0)
+    for b in brackets:
+        if any(abs(b.cy - d.cy) <= 1.3 * sp and xa - 1.5 * sp <= b.cx <= xb + 1.5 * sp for d, xa, xb in taken):
+            _mark(res, "tuplet", b.bbox, "bracket", 1.0)
+        else:
+            other(b)
+    return groups
+
+
+def _make_note(staff: Staff, c: Optional[Comp], h: Head, base: int, ledgers, res: StaffResult, src) -> Optional[Item]:
+    sp = staff.spacing
+    found = _staff_pos(staff, h, ledgers, res)
+    if found is None:
+        return None
+    pos, pos_f = found
     conf = max(0.0, 1.0 - 2.0 * abs(pos_f - pos))
     hollow = h.hollow
     stem, tip_len, tip_pt = _find_stem(c, h, sp) if c is not None else (None, 0, None)

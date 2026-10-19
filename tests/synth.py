@@ -29,11 +29,14 @@ class Note:
     acc: Optional[str] = None  # printed accidental: "#", "b", "n"
     tie: bool = False  # tied to the next note
     lower: Optional[str] = None  # a second voice on the same stem column (stem down; the main pitch gets the stem up)
+    grace: tuple = ()  # pitches of grace notes in front of this note (small, stemmed, slashed)
+    tri: int = 0  # 1, 2, 3: place in a triplet (the 3 and its bracket are drawn over the group of three)
 
 
 @dataclass
 class Rest:
     dur: str = "q"
+    tri: int = 0
 
 
 @dataclass
@@ -212,7 +215,8 @@ class _StaffLayout:
         for mi, measure in enumerate(self.spec.measures):
             for it in measure:
                 acc = isinstance(it, Note) and it.acc
-                xc = ptr + (2.5 if acc else 1.0) * sp
+                ng = len(it.grace) if isinstance(it, Note) else 0
+                xc = ptr + (2.5 if acc else 1.0) * sp + 2.0 * sp * ng
                 items.append({"x": xc, "it": it, "m": mi})
                 dur = DUR[it.dur]
                 extra = 2.0 if dur >= 1 else 1.0 if dur >= 0.5 else 0.0 if dur >= 0.25 else -0.3
@@ -278,6 +282,8 @@ class _StaffLayout:
                 dy = y - 0.5 * sp if pos % 2 == 0 else y
                 for k in range(it.dots):
                     d.disc(x + (1.15 + 0.5 * k) * sp, dy, 0.2 * sp)
+            for k, gp in enumerate(it.grace):
+                self.grace_note(x - (3.6 if it.acc else 2.2) * sp - 2.0 * sp * (len(it.grace) - 1 - k), gp)
         # stems / flags / beams
         for i, e in enumerate(items):
             it = e["it"]
@@ -299,6 +305,9 @@ class _StaffLayout:
                 d.line(sx, ty, sx + 1.0 * sp, ty + (-1.7 if down else 1.7) * sp, 0.28 * sp)
         for g in groups:
             self._beam_group(items, g)
+        for i, e in enumerate(items):
+            if getattr(e["it"], "tri", 0) == 1:
+                self._triplet(items, i, beamed)
         # ties
         for i, e in enumerate(items[:-1]):
             it = e["it"]
@@ -315,6 +324,45 @@ class _StaffLayout:
                 p.curveTo(x1 + (x2 - x1) * 0.2, self.d.Y(y0 + dy), x2 - (x2 - x1) * 0.2, self.d.Y(y0 + dy), x2, self.d.Y(y0))
                 self.d.c.drawPath(p, stroke=1, fill=0)
                 del up
+
+    def grace_note(self, x, pitch):
+        """A slashed grace note: a head two thirds the size, a short stem, one flag and the slash across them."""
+        d, sp = self.d, self.sp
+        pos = self.pos_of(pitch)
+        y = self.ypos(pos)
+        self.ledgers(x, pos)
+        d.ellipse(x, y, 0.42 * sp, 0.29 * sp, angle=20)
+        down = pos >= 4
+        sw, sg = 0.11 * sp, (1 if down else -1)
+        sx = x - 0.42 * sp + sw / 2 if down else x + 0.42 * sp - sw / 2
+        tip = y + sg * 2.4 * sp
+        d.line(sx, y, sx, tip, sw)
+        d.line(sx, tip, sx + 0.8 * sp, tip - sg * 1.2 * sp, 0.2 * sp)
+        d.line(sx - 0.55 * sp, tip - sg * 1.1 * sp, sx + 0.95 * sp, tip - sg * 0.3 * sp, 0.1 * sp)
+
+    def _triplet(self, items, i, beamed):
+        """The 3 over (or under) three consecutive items, with a bracket unless one beam already joins them."""
+        d, sp = self.d, self.sp
+        grp = [items[i], items[i + 1], items[i + 2]]
+        notes = [e for e in grp if "pos" in e]
+        down = bool(notes) and sum(e["pos"] for e in notes) / len(notes) >= 4
+        sg = 1 if down else -1
+        tips = [e["y"] + sg * 3.5 * sp for e in notes] or [self.ypos(4)]
+        is_beamed = all(k in beamed for k in (i, i + 1, i + 2))
+        edge = (max(tips) if down else min(tips)) + sg * (0.6 * sp if is_beamed else 0.0)
+        yc = edge + sg * (1.8 * sp if is_beamed else 1.3 * sp)
+        xa = grp[0]["x"] + (-0.65 if down else 0.65) * sp
+        xb = grp[2]["x"] + (-0.65 if down else 0.65) * sp
+        xm = (xa + xb) / 2
+        fs = 1.5 * sp
+        d.c.setFont("Helvetica", fs)
+        d.c.drawCentredString(xm, d.Y(yc) - 0.36 * fs, "3")
+        if not is_beamed:
+            lw, gap, hook = 0.1 * sp, 1.1 * sp, 0.7 * sp
+            d.line(xa, yc, xm - gap, yc, lw)
+            d.line(xm + gap, yc, xb, yc, lw)
+            d.line(xa, yc, xa, yc - sg * hook, lw)
+            d.line(xb, yc, xb, yc - sg * hook, lw)
 
     def _beam_group(self, items, g):
         """Stems and beams of one group; the beam follows the contour of the notes (slanted), at most ``max_slope``."""
@@ -449,20 +497,37 @@ def parse_measures(text: str) -> list[list]:
     out = []
     for bar in text.split("|"):
         items = []
+        pending = 0  # items still to mark as part of a triplet
         for tok in bar.split():
-            if tok[0] == "r":
-                items.append(Rest(tok[1]))
+            if tok == "(3":
+                pending = 3
                 continue
-            acc = None
-            if tok[0] in "#bn" and len(tok) > 1 and tok[1] in STEPS:
-                acc, tok = tok[0], tok[1:]
-            pitch, rest = tok[:2], tok[2:]
-            lower = None
-            if rest.startswith("/"):  # two voices: "G4/C4q" = G4 above C4, both quarter notes
-                lower, rest = rest[1:3], rest[3:]
-            tie = rest.endswith("~")
-            rest = rest.rstrip("~")
-            dots = rest.count(".")
-            items.append(Note(pitch, rest.replace(".", ""), dots, acc, tie, lower))
+            n_before = len(items)
+            _parse_token(tok, items)
+            if pending:
+                items[-1].tri = 4 - pending
+                pending -= 1
         out.append(items)
     return out
+
+
+def _parse_token(tok: str, items: list) -> None:
+    """One token of ``parse_measures``; "{D5,C5}E4q" puts two grace notes in front of E4q."""
+    if tok[0] == "r":
+        items.append(Rest(tok[1]))
+        return
+    grace = ()
+    if tok[0] == "{":
+        inner, tok = tok[1:].split("}", 1)
+        grace = tuple(inner.split(","))
+    acc = None
+    if tok[0] in "#bn" and len(tok) > 1 and tok[1] in STEPS:
+        acc, tok = tok[0], tok[1:]
+    pitch, rest = tok[:2], tok[2:]
+    lower = None
+    if rest.startswith("/"):  # two voices: "G4/C4q" = G4 above C4, both quarter notes
+        lower, rest = rest[1:3], rest[3:]
+    tie = rest.endswith("~")
+    rest = rest.rstrip("~")
+    dots = rest.count(".")
+    items.append(Note(pitch, rest.replace(".", ""), dots, acc, tie, lower, grace))

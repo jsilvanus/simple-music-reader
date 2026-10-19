@@ -71,6 +71,14 @@ Verified by tests on generated scores (sizes 4-8 pt staff spacing, rotated/noisy
   meter is flagged
 * beams: groups of two to four, slanted, single and double (sixteenth) beams; a beam lying on a staff line is not taken
   for a staff line
+* triplets (3:2): the "3" above or below three neighbouring notes or rests, with or without a bracket, also when a staff
+  line crosses the number; the three durations are two thirds of what is written (`Event.tuplet = (3, 2)`). A level
+  bracket stroke is told from a tie by being straight, so a triplet of repeated pitches is not read as tied. Other tuplets
+  (5, 6, 2:3 duplets) are not read
+* grace notes: a small slashed note with a flag in front of a note; it takes no time, is kept as `Event.graces` of the
+  note it leans on (ABC `{G}`, MusicXML `<grace>`, `grace_notes` in `melody.json`), and the bar's length is unchanged. One
+  flag per grace note (beamed groups of grace notes, accidentals on a grace note and long appoggiaturas are not
+  handled)
 * two voices on one staff (stacked heads on a common stem or on two stems): `--voice top|bottom` picks the voice that is
   exported, with one `CHORD_OR_POLYPHONY` warning per staff
 * melody staff: with several staves per system the single treble-clef staff is chosen (strategy `treble-clef`);
@@ -99,7 +107,9 @@ Honest list; most items are untested on real engravings.
 * Time-signature digits are read by templates and are the least certain part: a thin serif 6 can read as a 5, and fonts
   far from the bundled ones may fail (the meter then falls back to the bars). Unusual meters (3/2, 6/4, 5/8 ...) are
   not in the accepted list.
-* Tempo marks, dynamics, fermatas, repeat signs, voltas, grace notes, triplets and other tuplets, multi-measure rests,
+* Triplets and grace notes are verified on generated scores at 5-8 pt staff spacing and in a rotated noisy scan; at 4 pt
+  the triplet number crossing a staff line and a scanned grace note are missed. Tempo marks, dynamics, fermatas, repeat
+  signs, voltas, other tuplets, multi-measure rests,
   clef/key changes inside a system and lyrics are not interpreted. An unrecognised symbol inside the staff is logged as
   `UNCLASSIFIED_SYMBOL` (info) and drawn red in the debug image.
 * Text with closed letters (o, e, a) inside the staff area could be taken for hollow heads; they are rejected when

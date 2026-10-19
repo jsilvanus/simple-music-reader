@@ -46,7 +46,7 @@ def build_voice(selected: list[tuple[StaffResult, int, int]], key: KeySignature,
                 continue
             onset = measure.duration
             if it.kind == "rest":
-                ev = Event("rest", it.duration, onset=onset, measure=measure.index, confidence=it.conf, source=src)
+                ev = Event("rest", it.duration, onset=onset, measure=measure.index, confidence=it.conf, source=src, tuplet=it.tuplet)
             else:
                 d = base + it.pos
                 step = "CDEFGAB"[d % 7]
@@ -58,7 +58,11 @@ def build_voice(selected: list[tuple[StaffResult, int, int]], key: KeySignature,
                 state[(step, octave)] = alter
                 ev = Event("note", it.duration, Pitch(step, octave, alter), onset, measure.index,
                            accidental=it.accidental, dots=it.dots, tie_start=it.tie_start,
-                           confidence=it.conf, source=src)
+                           confidence=it.conf, source=src, tuplet=it.tuplet)
+                for g in it.graces:  # sounding pitch under the key and the bar so far; a grace note changes neither
+                    gd = base + g.pos
+                    gstep = "CDEFGAB"[gd % 7]
+                    ev.graces.append(Pitch(gstep, gd // 7, state.get((gstep, gd // 7), key.alter_for(gstep))))
                 if prev_tied is not None:
                     if prev_tied.pitch == ev.pitch:
                         ev.tie_stop = True

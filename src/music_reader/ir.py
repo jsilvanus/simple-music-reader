@@ -79,6 +79,8 @@ class Event:
     tie_stop: bool = False
     confidence: float = 1.0
     source: Optional[Source] = None
+    tuplet: Optional[tuple[int, int]] = None  # (actual, normal), e.g. (3, 2) for a triplet; ``duration`` is the sounding length
+    graces: list[Pitch] = field(default_factory=list)  # grace notes before this note: they take no time
 
     def __post_init__(self):
         if self.kind not in ("note", "rest"):
