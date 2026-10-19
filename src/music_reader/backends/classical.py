@@ -152,7 +152,7 @@ class ClassicalBackend:
         for si, group in enumerate(groups):
             results = []
             for s in group:
-                r = cvsym.analyze_staff(s, by_staff[s.uid], ledgers, pno, si, holes, beams)
+                r = cvsym.analyze_staff(s, by_staff[s.uid], ledgers, pno, si, holes, beams, options.voice)
                 results.append(r)
             systems.append(results)
             info.systems.append(SystemInfo(si, [StaffInfo(s.index, s.lines, s.x0, s.x1, s.spacing, r.clef, r.clef_confirmed)

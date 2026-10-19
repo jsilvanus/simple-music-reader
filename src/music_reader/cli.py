@@ -37,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--crop-dpi", type=float, help="resolution of the system crops (re-renders vector PDFs)")
     p.add_argument("--bundle", metavar="DIR", help="write melody.abc, melody.musicxml, melody.json, score.json, crops/ and manifest.json to DIR (for anno-api)")
     p.add_argument("--staff", type=int, help="1-based staff within each system that carries the melody")
+    p.add_argument("--voice", choices=["top", "bottom"], default="top",
+                   help="where several voices share a staff (soprano and alto): read the top voice (default) or the bottom one")
     p.add_argument("--meter", help="time signature, e.g. 3/4 (overrides the printed one that is read from the image)")
     p.add_argument("--key", help="key, e.g. G or Em (overrides the detected key signature)")
     p.add_argument("--title", help="title for the output")
@@ -57,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     fmt = fmt or "abc"
     doc = Document(args.input)
     opts = RecognitionOptions(staff=args.staff, meter=args.meter, key=args.key, title=args.title or Path(args.input).stem,
-                              dpi=args.dpi, pages=_pages(args.pages))
+                              dpi=args.dpi, pages=_pages(args.pages), voice=args.voice)
     result = get_backend(args.backend).recognize(doc, opts)
     text = export(result.score, fmt, title=opts.title)
     if args.output:

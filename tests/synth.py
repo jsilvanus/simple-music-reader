@@ -28,6 +28,7 @@ class Note:
     dots: int = 0
     acc: Optional[str] = None  # printed accidental: "#", "b", "n"
     tie: bool = False  # tied to the next note
+    lower: Optional[str] = None  # a second voice on the same stem column (stem down; the main pitch gets the stem up)
 
 
 @dataclass
@@ -264,6 +265,15 @@ class _StaffLayout:
                     d.ellipse(x, y, 0.55 * sp, 0.36 * sp, angle=20, fill=False, lw=0.2 * sp)
             else:
                 d.ellipse(x, y, 0.65 * sp, 0.46 * sp, angle=20)
+            if getattr(it, "lower", None):
+                pos2 = self.pos_of(it.lower)
+                y2 = self.ypos(pos2)
+                self.ledgers(x, pos2)
+                e["pos2"], e["y2"] = pos2, y2
+                if it.dur == "h":
+                    d.ellipse(x, y2, 0.55 * sp, 0.36 * sp, angle=20, fill=False, lw=0.2 * sp)
+                else:
+                    d.ellipse(x, y2, 0.65 * sp, 0.46 * sp, angle=20)
             if it.dots:
                 dy = y - 0.5 * sp if pos % 2 == 0 else y
                 for k in range(it.dots):
@@ -275,6 +285,10 @@ class _StaffLayout:
                 continue
             down = e["pos"] >= 4
             sw = 0.13 * sp
+            if getattr(it, "lower", None):  # two voices: the upper one has its stem up on the right, the lower one down on the left
+                d.line(e["x"] + 0.65 * sp - sw / 2, e["y"], e["x"] + 0.65 * sp - sw / 2, e["y"] - 3.2 * sp, sw)
+                d.line(e["x"] - 0.65 * sp + sw / 2, e["y2"], e["x"] - 0.65 * sp + sw / 2, e["y2"] + 3.2 * sp, sw)
+                continue
             sx = e["x"] - 0.65 * sp + sw / 2 if down else e["x"] + 0.65 * sp - sw / 2
             tip = e["y"] + (3.5 if down else -3.5) * sp
             d.line(sx, e["y"], sx, tip, sw)
@@ -368,7 +382,7 @@ class _StaffLayout:
 
 
 def _is_beamable(it) -> bool:
-    return isinstance(it, Note) and it.dur in ("e", "s")
+    return isinstance(it, Note) and it.dur in ("e", "s") and not it.lower
 
 
 def render_pdf(path, pages: list[list[SystemSpec]], sp: float = 5.0, title: str = "Esimerkkivirsi",
@@ -443,9 +457,12 @@ def parse_measures(text: str) -> list[list]:
             if tok[0] in "#bn" and len(tok) > 1 and tok[1] in STEPS:
                 acc, tok = tok[0], tok[1:]
             pitch, rest = tok[:2], tok[2:]
+            lower = None
+            if rest.startswith("/"):  # two voices: "G4/C4q" = G4 above C4, both quarter notes
+                lower, rest = rest[1:3], rest[3:]
             tie = rest.endswith("~")
             rest = rest.rstrip("~")
             dots = rest.count(".")
-            items.append(Note(pitch, rest.replace(".", ""), dots, acc, tie))
+            items.append(Note(pitch, rest.replace(".", ""), dots, acc, tie, lower))
         out.append(items)
     return out

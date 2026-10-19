@@ -90,6 +90,18 @@ def find_heads(c: Comp, sp: float) -> list[Head]:
     heads = []
     for i in range(1, n):
         x, y, w, h, a = (int(v) for v in stats[i])
+        if 1.7 * sp < h <= 2.7 * sp and 0.7 * sp <= w <= 1.7 * sp and 1.0 * sp * sp <= a <= 4.2 * sp * sp:
+            # two heads one above the other (a third in two voices on one stem column): split the blob in two
+            hh = 0.92 * sp
+            for top in (True, False):
+                ya, yb = (y, int(y + hh)) if top else (int(y + h - hh), y + h)
+                box = m[ya:yb, x : x + w] > 0
+                inside = np.zeros(box.shape, np.uint8)  # ink is judged inside the ellipse of the head, not in the box corners
+                cv2.ellipse(inside, (box.shape[1] // 2, box.shape[0] // 2), (max(1, box.shape[1] // 2 - 1), max(1, box.shape[0] // 2 - 1)), 0, 0, 360, 1, -1)
+                ink = float(box[inside > 0].mean()) if inside.any() else 0.0
+                heads.append(Head(c.x0 + x + w / 2 - pad, c.y0 + (ya + yb) / 2 - pad, c.x0 + x - pad, c.y0 + ya - pad,
+                                  c.x0 + x + w - pad, c.y0 + yb - pad, ink, ink < 0.8))
+            continue
         if not (0.4 * sp * sp <= a <= 2.4 * sp * sp and 0.7 * sp <= w <= 2.0 * sp and 0.6 * sp <= h <= 1.7 * sp):
             continue
         region = (lab == i).astype(np.uint8)
@@ -115,6 +127,15 @@ def _head_like_orientation(region: np.ndarray) -> bool:
     return abs(theta) <= 40.0
 
 
+def _solidity(region: np.ndarray) -> float:
+    cnts, _ = cv2.findContours(np.pad(region.astype(np.uint8), 1), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return 0.0
+    cnt = max(cnts, key=cv2.contourArea)
+    hull = cv2.contourArea(cv2.convexHull(cnt))
+    return float(cv2.contourArea(cnt) / hull) if hull > 0 else 0.0
+
+
 def find_holes(bw: np.ndarray, sp: float) -> list[Head]:
     """Hollow note heads found as small enclosed white regions of the page *with* staff lines in place.
 
@@ -129,6 +150,8 @@ def find_holes(bw: np.ndarray, sp: float) -> list[Head]:
             continue
         if not 0.55 <= a / (w * h) <= 0.9:
             continue
+        if _solidity(lab[y : y + h, x : x + w] == i) < 0.88:
+            continue  # the pocket between two heads, a head and a stem or a beam is concave; the inside of a ring is not
         pad_x, pad_y = 0.25 * sp, 0.2 * sp
         out.append(Head(float(cents[i][0]), float(cents[i][1]), x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y, 0.6, True))
     return out
@@ -240,7 +263,8 @@ def _mark(res, kind, bbox, label="", conf=1.0):
 
 
 def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: int, system: int,
-                  holes: Optional[list[Head]] = None, beams: Optional[np.ndarray] = None) -> StaffResult:
+                  holes: Optional[list[Head]] = None, beams: Optional[np.ndarray] = None,
+                  voice: str = "top") -> StaffResult:
     sp = staff.spacing
     res = StaffResult(staff)
     src = lambda c=None: Source(page, c.bbox if c else None, system, staff.index, c.id if c else None)  # noqa: E731
@@ -416,18 +440,26 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
     unmatched = [c for c in ties if not _apply_tie(res, notes, c, sp, diag)]
     _tie_from_halves(res, notes, [c for c in frags if c.w >= 1.0 * sp] + unmatched, sp)
 
-    # drop chord duplicates: keep top note, warn
+    # several heads in one column: two voices on one staff (or a chord); keep the voice that was asked for, warn once
     notes.sort(key=lambda i: i.x)
     merged: list[Item] = []
+    columns = 0
     for it in notes:
         if merged and abs(merged[-1].x - it.x) <= 0.8 * sp:
-            keep = merged[-1] if merged[-1].pos >= it.pos else it
-            drop = it if keep is merged[-1] else merged[-1]
-            diag("CHORD_OR_POLYPHONY", "warning", "several note heads in one column; the highest is taken as melody", None)
-            keep.notes.append(f"dropped lower note pos {drop.pos}")
+            prev = merged[-1]
+            take_it = it.pos > prev.pos if voice == "top" else it.pos < prev.pos
+            keep, drop = (it, prev) if take_it else (prev, it)
+            if not prev.notes or not any(n.startswith("dropped") for n in prev.notes):
+                columns += 1
+            keep.notes.append(f"dropped {'lower' if voice == 'top' else 'upper'} note pos {drop.pos}")
             merged[-1] = keep
         else:
             merged.append(it)
+    if columns:
+        which = "highest" if voice == "top" else "lowest"
+        diag("CHORD_OR_POLYPHONY", "warning",
+             f"{columns} column(s) with several note heads (two voices on one staff?); the {which} note is taken as the melody "
+             f"(--voice {'bottom' if voice == 'top' else 'top'} reads the other voice)", None)
     res.items.extend(merged)
     for c in bars:
         if c.x0 < header_end - 0.5 * sp:
