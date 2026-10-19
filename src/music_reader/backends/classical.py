@@ -84,8 +84,10 @@ class ClassicalBackend:
         # meter
         if options.meter:
             score.meter = Meter.parse(options.meter)
+            score.meter_source = "option"
         elif detected_meters:
             score.meter = Meter.parse(detected_meters[0])
+            score.meter_source = "printed"
             bars = infer_meter(score.voices[0].measures)
             if bars is not None and bars.measure_duration != score.meter.measure_duration:
                 score.diagnostics.append(Diagnostic("TIME_SIGNATURE_MISMATCH", "warning",
@@ -96,6 +98,7 @@ class ClassicalBackend:
                     f"time signature differs between systems; the first ({detected_meters[0]}) is used"))
         else:
             score.meter = infer_meter(score.voices[0].measures)
+            score.meter_source = "inferred"
             if score.meter is not None:
                 what = "a time signature was seen but its digits are not read" if time_sig_seen else "no time signature was found"
                 score.diagnostics.append(Diagnostic("METER_INFERRED", "warning",

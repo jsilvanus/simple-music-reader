@@ -233,6 +233,7 @@ class Score:
     voices: list[Voice] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     selection: dict = field(default_factory=dict)  # how the melody staff was chosen
+    meter_source: Optional[str] = None  # "printed" (digits read), "option" (--meter) or "inferred" (from the bars)
 
     @property
     def melody(self) -> Optional[Voice]:

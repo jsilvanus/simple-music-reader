@@ -165,7 +165,7 @@ def test_too_low_resolution_is_flagged(make_pdf):
 def test_bundle_for_downstream_consumers(multi, tmp_path):
     assert main([str(multi), "--meter", "4/4", "--bundle", str(tmp_path / "b"), "-o", str(tmp_path / "x.abc")]) == 0
     b = tmp_path / "b"
-    assert {p.name for p in b.iterdir()} == {"melody.abc", "melody.musicxml", "score.json", "crops", "manifest.json"}
+    assert {p.name for p in b.iterdir()} == {"melody.abc", "melody.musicxml", "melody.json", "score.json", "crops", "manifest.json"}
     m = json.loads((b / "manifest.json").read_text())
     assert m["source"]["file"] == "multi.pdf" and len(m["source"]["sha256"]) == 64
     assert [(c["page"], c["system"]) for c in m["crops"]] == [(1, 1), (1, 2), (2, 1)]

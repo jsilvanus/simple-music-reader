@@ -6,6 +6,7 @@ from typing import Callable
 from ..ir import Score
 from .abc import export_abc
 from .json_export import export_json
+from .melody import export_melody
 from .musicxml import export_musicxml
 
 EXPORTERS: dict[str, Callable[..., str]] = {}
@@ -19,6 +20,7 @@ def register_exporter(name: str, fn: Callable[..., str], extension: str | None =
 EXTENSIONS: dict[str, str] = {}
 register_exporter("abc", export_abc)
 register_exporter("json", export_json)
+register_exporter("melody", export_melody, "melody.json")
 register_exporter("musicxml", export_musicxml, "musicxml")
 
 
