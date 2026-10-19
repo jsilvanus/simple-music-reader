@@ -28,11 +28,15 @@ class Note:
     dots: int = 0
     acc: Optional[str] = None  # printed accidental: "#", "b", "n"
     tie: bool = False  # tied to the next note
+    lower: Optional[str] = None  # a second voice on the same stem column (stem down; the main pitch gets the stem up)
+    grace: tuple = ()  # pitches of grace notes in front of this note (small, stemmed, slashed)
+    tri: int = 0  # 1, 2, 3: place in a triplet (the 3 and its bracket are drawn over the group of three)
 
 
 @dataclass
 class Rest:
     dur: str = "q"
+    tri: int = 0
 
 
 @dataclass
@@ -41,6 +45,9 @@ class StaffSpec:
     key_fifths: int = 0
     meter: Optional[str] = "4/4"
     clef: str = "treble"
+    beam_group_size: int = 2  # longest run of eighths/sixteenths joined by one beam (2 = pairs, as before)
+    max_slope: float = 0.0  # steepest beam (rise per unit of width); 0 draws flat beams, as before
+    time_font: str = "Helvetica-Bold"  # font of the time-signature digits
     final: bool = False  # final double barline after the last measure
 
 
@@ -79,6 +86,14 @@ class _Drawer:
         if close:
             p.close()
         self.c.drawPath(p, stroke=1, fill=0)
+
+    def fill_poly(self, pts):
+        p = self.c.beginPath()
+        p.moveTo(pts[0][0], self.Y(pts[0][1]))
+        for x, y in pts[1:]:
+            p.lineTo(x, self.Y(y))
+        p.close()
+        self.c.drawPath(p, stroke=0, fill=1)
 
     def filled_rect(self, x0, y0, x1, y1):
         self.c.rect(x0, self.Y(y1), x1 - x0, y1 - y0, stroke=0, fill=1)
@@ -142,11 +157,18 @@ class _StaffLayout:
     def time_signature(self, x):
         if not self.spec.meter:
             return x
+        d, c, sp = self.d, self.d.c, self.sp
+        if self.spec.meter in ("C", "C|"):
+            cx, cy, r = x, self.ypos(4), 0.95 * sp
+            pts = [(cx + r * math.cos(math.radians(a)), cy + 1.05 * r * math.sin(math.radians(a))) for a in range(40, 321, 10)]
+            d.poly(pts, 0.35 * sp)
+            if self.spec.meter == "C|":
+                d.line(cx, self.ypos(8.3), cx, self.ypos(-0.3), 0.18 * sp)
+            return x + 1.6 * sp
         num, den = self.spec.meter.split("/")
-        c, sp = self.d.c, self.sp
-        c.setFont("Helvetica-Bold", 2.7 * sp)
-        c.drawCentredString(x, self.d.Y(self.ypos(4.05)), num)
-        c.drawCentredString(x, self.d.Y(self.ypos(0.05)), den)
+        c.setFont(self.spec.time_font, 2.7 * sp)
+        c.drawCentredString(x, d.Y(self.ypos(4.05)), num)
+        c.drawCentredString(x, d.Y(self.ypos(0.05)), den)
         return x + 1.6 * sp
 
     def sharp(self, x, y):
@@ -193,7 +215,8 @@ class _StaffLayout:
         for mi, measure in enumerate(self.spec.measures):
             for it in measure:
                 acc = isinstance(it, Note) and it.acc
-                xc = ptr + (2.5 if acc else 1.0) * sp
+                ng = len(it.grace) if isinstance(it, Note) else 0
+                xc = ptr + (2.5 if acc else 1.0) * sp + 2.0 * sp * ng
                 items.append({"x": xc, "it": it, "m": mi})
                 dur = DUR[it.dur]
                 extra = 2.0 if dur >= 1 else 1.0 if dur >= 0.5 else 0.0 if dur >= 0.25 else -0.3
@@ -211,13 +234,22 @@ class _StaffLayout:
 
     def draw_events(self, items, bars):
         d, sp = self.d, self.sp
-        # beam pairs: consecutive eighth notes within a measure
-        beam = {}
-        for i in range(len(items) - 1):
-            a, b = items[i], items[i + 1]
-            if (a["m"] == b["m"] and i not in beam and (i - 1) not in beam and _is_eighth(a["it"]) and _is_eighth(b["it"])):
-                beam[i] = i + 1
-        beamed = set(beam) | set(beam.values())
+        # beam groups: consecutive eighth/sixteenth notes of one measure, at most four (``beam_groups`` off: pairs only)
+        groups, cur = [], []
+        for i, e in enumerate(items):
+            ok = _is_beamable(e["it"])
+            if ok and cur and (items[cur[-1]]["m"] != e["m"] or len(cur) >= self.spec.beam_group_size):
+                groups.append(cur)
+                cur = []
+            if ok:
+                cur.append(i)
+            elif cur:
+                groups.append(cur)
+                cur = []
+        if cur:
+            groups.append(cur)
+        groups = [g for g in groups if len(g) >= 2]
+        beamed = {i for g in groups for i in g}
         for i, e in enumerate(items):
             it, x = e["it"], e["x"]
             if isinstance(it, Rest):
@@ -237,46 +269,45 @@ class _StaffLayout:
                     d.ellipse(x, y, 0.55 * sp, 0.36 * sp, angle=20, fill=False, lw=0.2 * sp)
             else:
                 d.ellipse(x, y, 0.65 * sp, 0.46 * sp, angle=20)
+            if getattr(it, "lower", None):
+                pos2 = self.pos_of(it.lower)
+                y2 = self.ypos(pos2)
+                self.ledgers(x, pos2)
+                e["pos2"], e["y2"] = pos2, y2
+                if it.dur == "h":
+                    d.ellipse(x, y2, 0.55 * sp, 0.36 * sp, angle=20, fill=False, lw=0.2 * sp)
+                else:
+                    d.ellipse(x, y2, 0.65 * sp, 0.46 * sp, angle=20)
             if it.dots:
                 dy = y - 0.5 * sp if pos % 2 == 0 else y
                 for k in range(it.dots):
                     d.disc(x + (1.15 + 0.5 * k) * sp, dy, 0.2 * sp)
+            for k, gp in enumerate(it.grace):
+                self.grace_note(x - (3.6 if it.acc else 2.2) * sp - 2.0 * sp * (len(it.grace) - 1 - k), gp)
         # stems / flags / beams
         for i, e in enumerate(items):
             it = e["it"]
-            if isinstance(it, Rest) or it.dur == "w":
+            if isinstance(it, Rest) or it.dur == "w" or i in beamed:
                 continue
             down = e["pos"] >= 4
-            if i in beam:
-                j = beam[i]
-                down = (e["pos"] + items[j]["pos"]) / 2 >= 4
-            elif i in beamed:
-                continue_down = None  # second of a pair, handled with the first
-                continue
             sw = 0.13 * sp
-            stems = [e] if i not in beam else [e, items[beam[i]]]
-            tips = []
-            for s in stems:
-                sx = s["x"] - 0.65 * sp + sw / 2 if down else s["x"] + 0.65 * sp - sw / 2
-                tip = s["y"] + (3.5 if down else -3.5) * sp
-                tips.append((sx, tip, s))
-            if i in beam:
-                tip_y = max(t[1] for t in tips) if down else min(t[1] for t in tips)
-                for sx, _t, s in tips:
-                    d.line(sx, s["y"], sx, tip_y, sw)
-                x_a, x_b = tips[0][0], tips[1][0]
-                if down:
-                    d.filled_rect(x_a - sw / 2, tip_y - 0.5 * sp, x_b + sw / 2, tip_y)
-                else:
-                    d.filled_rect(x_a - sw / 2, tip_y, x_b + sw / 2, tip_y + 0.5 * sp)
-            else:
-                sx, tip, s = tips[0]
-                d.line(sx, s["y"], sx, tip, sw)
-                nflags = {"q": 0, "h": 0, "e": 1, "s": 2}[it.dur]
-                for k in range(nflags):
-                    off = k * 0.75 * sp * (-1 if down else 1)  # further flags sit closer to the head
-                    ty = tip + off
-                    d.line(sx, ty, sx + 1.0 * sp, ty + (-1.7 if down else 1.7) * sp, 0.28 * sp)
+            if getattr(it, "lower", None):  # two voices: the upper one has its stem up on the right, the lower one down on the left
+                d.line(e["x"] + 0.65 * sp - sw / 2, e["y"], e["x"] + 0.65 * sp - sw / 2, e["y"] - 3.2 * sp, sw)
+                d.line(e["x"] - 0.65 * sp + sw / 2, e["y2"], e["x"] - 0.65 * sp + sw / 2, e["y2"] + 3.2 * sp, sw)
+                continue
+            sx = e["x"] - 0.65 * sp + sw / 2 if down else e["x"] + 0.65 * sp - sw / 2
+            tip = e["y"] + (3.5 if down else -3.5) * sp
+            d.line(sx, e["y"], sx, tip, sw)
+            nflags = {"q": 0, "h": 0, "e": 1, "s": 2}[it.dur]
+            for k in range(nflags):
+                off = k * 0.75 * sp * (-1 if down else 1)  # further flags sit closer to the head
+                ty = tip + off
+                d.line(sx, ty, sx + 1.0 * sp, ty + (-1.7 if down else 1.7) * sp, 0.28 * sp)
+        for g in groups:
+            self._beam_group(items, g)
+        for i, e in enumerate(items):
+            if getattr(e["it"], "tri", 0) == 1:
+                self._triplet(items, i, beamed)
         # ties
         for i, e in enumerate(items[:-1]):
             it = e["it"]
@@ -293,6 +324,88 @@ class _StaffLayout:
                 p.curveTo(x1 + (x2 - x1) * 0.2, self.d.Y(y0 + dy), x2 - (x2 - x1) * 0.2, self.d.Y(y0 + dy), x2, self.d.Y(y0))
                 self.d.c.drawPath(p, stroke=1, fill=0)
                 del up
+
+    def grace_note(self, x, pitch):
+        """A slashed grace note: a head two thirds the size, a short stem, one flag and the slash across them."""
+        d, sp = self.d, self.sp
+        pos = self.pos_of(pitch)
+        y = self.ypos(pos)
+        self.ledgers(x, pos)
+        d.ellipse(x, y, 0.42 * sp, 0.29 * sp, angle=20)
+        down = pos >= 4
+        sw, sg = 0.11 * sp, (1 if down else -1)
+        sx = x - 0.42 * sp + sw / 2 if down else x + 0.42 * sp - sw / 2
+        tip = y + sg * 2.4 * sp
+        d.line(sx, y, sx, tip, sw)
+        d.line(sx, tip, sx + 0.8 * sp, tip - sg * 1.2 * sp, 0.2 * sp)
+        d.line(sx - 0.55 * sp, tip - sg * 1.1 * sp, sx + 0.95 * sp, tip - sg * 0.3 * sp, 0.1 * sp)
+
+    def _triplet(self, items, i, beamed):
+        """The 3 over (or under) three consecutive items, with a bracket unless one beam already joins them."""
+        d, sp = self.d, self.sp
+        grp = [items[i], items[i + 1], items[i + 2]]
+        notes = [e for e in grp if "pos" in e]
+        down = bool(notes) and sum(e["pos"] for e in notes) / len(notes) >= 4
+        sg = 1 if down else -1
+        tips = [e["y"] + sg * 3.5 * sp for e in notes] or [self.ypos(4)]
+        is_beamed = all(k in beamed for k in (i, i + 1, i + 2))
+        edge = (max(tips) if down else min(tips)) + sg * (0.6 * sp if is_beamed else 0.0)
+        yc = edge + sg * (1.8 * sp if is_beamed else 1.3 * sp)
+        xa = grp[0]["x"] + (-0.65 if down else 0.65) * sp
+        xb = grp[2]["x"] + (-0.65 if down else 0.65) * sp
+        xm = (xa + xb) / 2
+        fs = 1.5 * sp
+        d.c.setFont("Helvetica", fs)
+        d.c.drawCentredString(xm, d.Y(yc) - 0.36 * fs, "3")
+        if not is_beamed:
+            lw, gap, hook = 0.1 * sp, 1.1 * sp, 0.7 * sp
+            d.line(xa, yc, xm - gap, yc, lw)
+            d.line(xm + gap, yc, xb, yc, lw)
+            d.line(xa, yc, xa, yc - sg * hook, lw)
+            d.line(xb, yc, xb, yc - sg * hook, lw)
+
+    def _beam_group(self, items, g):
+        """Stems and beams of one group; the beam follows the contour of the notes (slanted), at most ``max_slope``."""
+        d, sp = self.d, self.sp
+        sw = 0.13 * sp
+        down = sum(items[i]["pos"] for i in g) / len(g) >= 4
+        sign = 1 if down else -1
+        xs = [items[i]["x"] + (-0.65 * sp + sw / 2 if down else 0.65 * sp - sw / 2) for i in g]
+        tips = [items[i]["y"] + sign * 3.5 * sp for i in g]
+        slope = (tips[-1] - tips[0]) / (xs[-1] - xs[0])
+        slope = max(-self.spec.max_slope, min(self.spec.max_slope, slope))
+        # the line through the mean tip with that slope, pushed outwards until every stem is at least 3 spacings long
+        mx, my = sum(xs) / len(xs), sum(tips) / len(tips)
+
+        def line_y(x):
+            return my + slope * (x - mx)
+
+        shift = max(0.0, max(sign * ((items[i]["y"] + sign * 3.0 * sp) - line_y(x)) for i, x in zip(g, xs)))
+        my += sign * shift
+
+        def edge(x, inward):  # y of the beam's outer edge (inward=0) or a line `inward` further towards the heads
+            return line_y(x) - sign * inward
+
+        thick, gap = 0.5 * sp, 0.25 * sp
+        for i, x in zip(g, xs):
+            d.line(x, items[i]["y"], x, line_y(x), sw)
+        d.fill_poly([(xs[0] - sw / 2, edge(xs[0] - sw / 2, 0)), (xs[-1] + sw / 2, edge(xs[-1] + sw / 2, 0)),
+                     (xs[-1] + sw / 2, edge(xs[-1] + sw / 2, thick)), (xs[0] - sw / 2, edge(xs[0] - sw / 2, thick))])
+        # second beam: between neighbouring sixteenths; a lone sixteenth gets a stub towards its neighbour
+        is16 = [items[i]["it"].dur == "s" for i in g]
+        off = thick + gap
+        for k, sixteenth in enumerate(is16):
+            if not sixteenth:
+                continue
+            if k + 1 < len(g) and is16[k + 1]:
+                a, b = xs[k] - sw / 2, xs[k + 1] + sw / 2
+            elif k > 0 and not is16[k - 1] or (k + 1 == len(g)):
+                a, b = xs[k] - 0.9 * sp, xs[k] + sw / 2
+            elif k == 0 or not is16[k - 1]:
+                a, b = xs[k] - sw / 2, xs[k] + 0.9 * sp
+            else:
+                continue
+            d.fill_poly([(a, edge(a, off)), (b, edge(b, off)), (b, edge(b, off + thick)), (a, edge(a, off + thick))])
 
     def ledgers(self, x, pos):
         sp = self.sp
@@ -316,8 +429,8 @@ class _StaffLayout:
                 self.d.line(b, self.top, b, self.bottom, 0.12 * sp)
 
 
-def _is_eighth(it) -> bool:
-    return isinstance(it, Note) and it.dur == "e" and not it.dots
+def _is_beamable(it) -> bool:
+    return isinstance(it, Note) and it.dur in ("e", "s") and not it.lower
 
 
 def render_pdf(path, pages: list[list[SystemSpec]], sp: float = 5.0, title: str = "Esimerkkivirsi",
@@ -384,17 +497,37 @@ def parse_measures(text: str) -> list[list]:
     out = []
     for bar in text.split("|"):
         items = []
+        pending = 0  # items still to mark as part of a triplet
         for tok in bar.split():
-            if tok[0] == "r":
-                items.append(Rest(tok[1]))
+            if tok == "(3":
+                pending = 3
                 continue
-            acc = None
-            if tok[0] in "#bn" and len(tok) > 1 and tok[1] in STEPS:
-                acc, tok = tok[0], tok[1:]
-            pitch, rest = tok[:2], tok[2:]
-            tie = rest.endswith("~")
-            rest = rest.rstrip("~")
-            dots = rest.count(".")
-            items.append(Note(pitch, rest.replace(".", ""), dots, acc, tie))
+            n_before = len(items)
+            _parse_token(tok, items)
+            if pending:
+                items[-1].tri = 4 - pending
+                pending -= 1
         out.append(items)
     return out
+
+
+def _parse_token(tok: str, items: list) -> None:
+    """One token of ``parse_measures``; "{D5,C5}E4q" puts two grace notes in front of E4q."""
+    if tok[0] == "r":
+        items.append(Rest(tok[1]))
+        return
+    grace = ()
+    if tok[0] == "{":
+        inner, tok = tok[1:].split("}", 1)
+        grace = tuple(inner.split(","))
+    acc = None
+    if tok[0] in "#bn" and len(tok) > 1 and tok[1] in STEPS:
+        acc, tok = tok[0], tok[1:]
+    pitch, rest = tok[:2], tok[2:]
+    lower = None
+    if rest.startswith("/"):  # two voices: "G4/C4q" = G4 above C4, both quarter notes
+        lower, rest = rest[1:3], rest[3:]
+    tie = rest.endswith("~")
+    rest = rest.rstrip("~")
+    dots = rest.count(".")
+    items.append(Note(pitch, rest.replace(".", ""), dots, acc, tie, lower, grace))

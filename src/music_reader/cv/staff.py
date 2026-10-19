@@ -70,12 +70,27 @@ def rotate(img: np.ndarray, degrees: float, border: int = 0) -> np.ndarray:
     return cv2.warpAffine(img, m, (w, h), flags=cv2.INTER_LINEAR, borderValue=border)
 
 
+def _drop_beams(line_mask: np.ndarray) -> np.ndarray:
+    """Remove from the horizontal-stroke mask what is much thicker than a staff line: a long beam (or a beam lying on a
+    staff line) survives the opening and would thicken or shift that line's row. The line is only lost over the beam."""
+    n, _, stats, _ = cv2.connectedComponentsWithStats(line_mask, connectivity=8)
+    if n <= 1:
+        return line_mask
+    t = float(np.median(stats[1:, cv2.CC_STAT_HEIGHT]))
+    k = int(np.ceil(2.5 * t)) + 1
+    thick = cv2.morphologyEx(line_mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, k)))
+    if not thick.any():
+        return line_mask
+    grown = cv2.dilate(thick, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 3)))  # anti-aliased edges
+    return cv2.bitwise_and(line_mask, cv2.bitwise_not(grown))
+
+
 def detect_staves(bw: np.ndarray) -> tuple[list[Staff], np.ndarray]:
     """Find five-line staves. Returns (staves sorted top to bottom, staff-line mask)."""
     h, w = bw.shape
     klen = max(30, int(0.12 * w))
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (klen, 1))
-    line_mask = cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel)
+    line_mask = _drop_beams(cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel))
     rows = line_mask.sum(axis=1, dtype=np.float64) / 255.0
     if rows.max() <= 0:
         return [], line_mask

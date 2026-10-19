@@ -45,7 +45,17 @@ def export_musicxml(score: Score, title: str | None = None) -> str:
             clef = ET.SubElement(at, "clef")
             ET.SubElement(clef, "sign").text = "G"
             ET.SubElement(clef, "line").text = "2"
+        run = 0  # events of the open tuplet still to come
         for e in m.events:
+            for g in e.graces:  # a grace note has no duration; MusicXML wants it in front of the note it leans on
+                gn = ET.SubElement(me, "note")
+                ET.SubElement(gn, "grace", slash="yes")
+                gp = ET.SubElement(gn, "pitch")
+                ET.SubElement(gp, "step").text = g.step
+                if g.alter:
+                    ET.SubElement(gp, "alter").text = str(g.alter)
+                ET.SubElement(gp, "octave").text = str(g.octave)
+                ET.SubElement(gn, "type").text = "eighth"
             n = ET.SubElement(me, "note")
             if e.kind == "rest":
                 ET.SubElement(n, "rest")
@@ -61,13 +71,26 @@ def export_musicxml(score: Score, title: str | None = None) -> str:
                 ET.SubElement(n, "tie", type="stop")
             if e.tie_start:
                 ET.SubElement(n, "tie", type="start")
-            tname, dots = _base_and_dots(e.duration)
+            written = e.duration * e.tuplet[0] / e.tuplet[1] if e.tuplet else e.duration
+            tname, dots = _base_and_dots(written)
             if tname:
                 ET.SubElement(n, "type").text = tname
                 for _ in range(dots):
                     ET.SubElement(n, "dot")
-            if e.tie_start or e.tie_stop:
+            tuplet_type = None
+            if e.tuplet:
+                tm = ET.SubElement(n, "time-modification")
+                ET.SubElement(tm, "actual-notes").text = str(e.tuplet[0])
+                ET.SubElement(tm, "normal-notes").text = str(e.tuplet[1])
+                if run == 0:
+                    run, tuplet_type = e.tuplet[0], "start"
+                run -= 1
+                if run == 0 and tuplet_type is None:
+                    tuplet_type = "stop"
+            if e.tie_start or e.tie_stop or tuplet_type:
                 nt = ET.SubElement(n, "notations")
+                if tuplet_type:
+                    ET.SubElement(nt, "tuplet", type=tuplet_type)
                 if e.tie_stop:
                     ET.SubElement(nt, "tied", type="stop")
                 if e.tie_start:

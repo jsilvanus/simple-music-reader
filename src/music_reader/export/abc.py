@@ -10,11 +10,16 @@ _ACC = {1: "^", -1: "_", 0: "="}
 
 
 def _unit_length(score: Score) -> Fraction:
-    durs = {e.duration for v in score.voices for e in v.events()}
+    durs = {_written(e) for v in score.voices for e in v.events()}
     if not durs:
         return Fraction(1, 4)
     # 1/8 if any duration is shorter than a quarter, else 1/4
     return Fraction(1, 8) if min(durs) < Fraction(1, 4) else Fraction(1, 4)
+
+
+def _written(e: Event) -> Fraction:
+    """The length as printed: a triplet eighth sounds 1/12 but is written as an eighth."""
+    return e.duration * e.tuplet[0] / e.tuplet[1] if e.tuplet else e.duration
 
 
 def _pitch_token(p: Pitch) -> str:
@@ -55,7 +60,13 @@ def export_abc(score: Score, title: str | None = None) -> str:
         # accidental state is per bar: (step, octave) -> alter in force
         state: dict[tuple[str, int], int] = {}
         toks: list[str] = []
+        run = 0  # events of the tuplet that is open
         for e in m.events:
+            if e.tuplet and run == 0:
+                toks.append(f"({e.tuplet[0]}")
+                run = e.tuplet[0]
+            if run:
+                run -= 1
             toks.append(_event_token(e, key, state, unit))
         bars.append(" ".join(toks))
     body: list[str] = []
@@ -67,13 +78,20 @@ def export_abc(score: Score, title: str | None = None) -> str:
 
 
 def _event_token(e: Event, key, state, unit: Fraction) -> str:
-    length = _length_token(e.duration, unit)
+    length = _length_token(_written(e), unit)
     if e.kind == "rest":
         return f"z{length}"
+    graces = ""
+    if e.graces:
+        gt = []
+        for g in e.graces:  # an accidental on a grace note is written, but does not stay in force
+            inf = state.get((g.step, g.octave), key.alter_for(g.step))
+            gt.append(f"{_ACC[g.alter] if g.alter != inf else ''}{_pitch_token(g)}")
+        graces = "{" + "".join(gt) + "}"
     p = e.pitch
     in_force = state.get((p.step, p.octave), key.alter_for(p.step))
     acc = ""
     if p.alter != in_force:
         acc = _ACC[p.alter]
     state[(p.step, p.octave)] = p.alter
-    return f"{acc}{_pitch_token(p)}{length}{'-' if e.tie_start else ''}"
+    return f"{graces}{acc}{_pitch_token(p)}{length}{'-' if e.tie_start else ''}"

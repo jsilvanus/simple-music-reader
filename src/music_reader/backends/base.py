@@ -23,6 +23,7 @@ class RecognitionOptions:
     title: Optional[str] = None
     dpi: Optional[float] = None
     pages: Optional[list[int]] = None  # 1-based page numbers; default all
+    voice: str = "top"  # which note of a chord (two voices on one staff) is the melody: "top" (soprano) or "bottom" (alto)
 
 
 @dataclass

@@ -79,6 +79,8 @@ class Event:
     tie_stop: bool = False
     confidence: float = 1.0
     source: Optional[Source] = None
+    tuplet: Optional[tuple[int, int]] = None  # (actual, normal), e.g. (3, 2) for a triplet; ``duration`` is the sounding length
+    graces: list[Pitch] = field(default_factory=list)  # grace notes before this note: they take no time
 
     def __post_init__(self):
         if self.kind not in ("note", "rest"):
@@ -233,6 +235,7 @@ class Score:
     voices: list[Voice] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     selection: dict = field(default_factory=dict)  # how the melody staff was chosen
+    meter_source: Optional[str] = None  # "printed" (digits read), "option" (--meter) or "inferred" (from the bars)
 
     @property
     def melody(self) -> Optional[Voice]:

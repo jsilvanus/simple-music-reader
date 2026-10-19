@@ -27,6 +27,8 @@ class ClassicalBackend:
         selected = []
         key_candidates: list[tuple[int, int, int]] = []  # (fifths, page, system)
         ambiguous_systems = 0
+        by_clef = 0
+        chosen: list[int] = []
         time_sig_seen = False
         detected_meters: list[str] = []
         pages = options.pages or list(range(1, len(doc) + 1))
@@ -38,9 +40,14 @@ class ClassicalBackend:
             score.pages.append(info)
             result.pages.append(dbg)
             for si, group in enumerate(systems):
-                if options.staff is None and len(group) > 1:
-                    ambiguous_systems += 1
                 k = (options.staff or 1) - 1
+                if options.staff is None and len(group) > 1:
+                    treble = [i for i, r in enumerate(group) if r.clef == "treble"]
+                    if len(treble) == 1:  # a bass clef next to a treble clef: the melody is on the treble staff
+                        k = treble[0]
+                        by_clef += 1
+                    else:
+                        ambiguous_systems += 1
                 if k >= len(group):
                     score.diagnostics.append(Diagnostic("STAFF_NOT_FOUND", "error",
                         f"system has {len(group)} staves, cannot select staff {k + 1}", Source(pno, None, si)))
@@ -54,6 +61,7 @@ class ClassicalBackend:
                 if res.key_fifths is not None:
                     key_candidates.append((res.key_fifths, pno, si))
                 selected.append((res, pno, si))
+                chosen.append(k + 1)
                 for other in group:
                     if other is not res:
                         dbg.marks.extend({**m, "kind": "other-" + m["kind"]} for m in other.marks)
@@ -61,12 +69,20 @@ class ClassicalBackend:
             score.diagnostics.append(Diagnostic("AMBIGUOUS_MELODY_STAFF", "warning",
                 f"{ambiguous_systems} system(s) have several staves and no staff was chosen; the first staff is assumed to carry "
                 "the melody (use --staff N to choose)"))
+        staff_no = options.staff or (max(set(chosen), key=chosen.count) if chosen else 1)
+        if options.staff:
+            strategy, description = "explicit", f"staff {options.staff} of each system"
+        elif ambiguous_systems:
+            strategy, description = "assumed-first-staff", "staff 1 of each system (assumed; several staves present)"
+        elif by_clef:
+            strategy, description = "treble-clef", f"the treble-clef staff of each system (staff {staff_no} of {by_clef} two-staff system(s))"
+        else:
+            strategy, description = "assumed-first-staff", "staff 1 of each system"
         score.selection = {
-            "strategy": "explicit" if options.staff else "assumed-first-staff",
-            "staff": options.staff or 1,
+            "strategy": strategy,
+            "staff": staff_no,
             "ambiguous": bool(ambiguous_systems) and not options.staff,
-            "description": f"staff {options.staff or 1} of each system"
-            + ("" if options.staff else " (assumed; several staves present)" if ambiguous_systems else ""),
+            "description": description,
         }
         # key
         if options.key:
@@ -84,13 +100,21 @@ class ClassicalBackend:
         # meter
         if options.meter:
             score.meter = Meter.parse(options.meter)
+            score.meter_source = "option"
         elif detected_meters:
             score.meter = Meter.parse(detected_meters[0])
+            score.meter_source = "printed"
+            bars = infer_meter(score.voices[0].measures)
+            if bars is not None and bars.measure_duration != score.meter.measure_duration:
+                score.diagnostics.append(Diagnostic("TIME_SIGNATURE_MISMATCH", "warning",
+                    f"the printed time signature was read as {score.meter} but most measures hold {bars.measure_duration} "
+                    f"(as {bars}); the digits may be misread (use --meter to set it)"))
             if any(m != detected_meters[0] for m in detected_meters[1:]):
                 score.diagnostics.append(Diagnostic("TIME_SIGNATURE_CHANGE", "warning",
                     f"time signature differs between systems; the first ({detected_meters[0]}) is used"))
         else:
             score.meter = infer_meter(score.voices[0].measures)
+            score.meter_source = "inferred"
             if score.meter is not None:
                 what = "a time signature was seen but its digits are not read" if time_sig_seen else "no time signature was found"
                 score.diagnostics.append(Diagnostic("METER_INFERRED", "warning",
@@ -138,12 +162,13 @@ class ClassicalBackend:
         residual, ledgers = cvstaff.remove_ledger_lines(residual, staves)
         comps = cvsym.extract_components(residual, sp_med)
         by_staff = _assign(comps, staves)
-        holes = cvsym.find_holes(bw, sp_med)
+        beams = cvsym.find_beams(residual, sp_med)
+        holes = cvsym.find_holes(cv2.bitwise_and(bw, cv2.bitwise_not(beams)), sp_med)
         systems = []
         for si, group in enumerate(groups):
             results = []
             for s in group:
-                r = cvsym.analyze_staff(s, by_staff[s.uid], ledgers, pno, si, holes)
+                r = cvsym.analyze_staff(s, by_staff[s.uid], ledgers, pno, si, holes, beams, options.voice)
                 results.append(r)
             systems.append(results)
             info.systems.append(SystemInfo(si, [StaffInfo(s.index, s.lines, s.x0, s.x1, s.spacing, r.clef, r.clef_confirmed)

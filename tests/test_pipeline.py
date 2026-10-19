@@ -77,6 +77,23 @@ def test_ambiguous_melody_staff_is_reported_not_hidden(two_staves):
     assert "% melody source" in __import__("music_reader.export", fromlist=["export"]).export(res.score, "abc")
 
 
+@pytest.fixture(scope="module")
+def grand_staff(pdfdir):
+    path = pdfdir / "grand-bass.pdf"
+    render_pdf(path, [[SystemSpec([StaffSpec(parse_measures("E4q G4q B4q D5q | C5w")),
+                                   StaffSpec(parse_measures("C3h E3h | G2w"), clef="bass")]),
+                       SystemSpec([StaffSpec(parse_measures("D5q B4q G4q E4q | C5w")),
+                                   StaffSpec(parse_measures("G2h E3h | C3w"), clef="bass")])]])
+    return path
+
+
+def test_melody_staff_is_chosen_by_clef(grand_staff):
+    res = read(grand_staff, meter="4/4")
+    assert "AMBIGUOUS_MELODY_STAFF" not in [d.code for d in res.score.diagnostics]
+    assert res.score.selection["strategy"] == "treble-clef" and not res.score.selection["ambiguous"]
+    assert events(res.score) == spec("E4q G4q B4q D5q C5w D5q B4q G4q E4q C5w")
+
+
 def test_user_selects_the_melody_staff(two_staves):
     res = read(two_staves, staff=2, meter="4/4")
     assert "AMBIGUOUS_MELODY_STAFF" not in [d.code for d in res.score.diagnostics]
@@ -165,7 +182,7 @@ def test_too_low_resolution_is_flagged(make_pdf):
 def test_bundle_for_downstream_consumers(multi, tmp_path):
     assert main([str(multi), "--meter", "4/4", "--bundle", str(tmp_path / "b"), "-o", str(tmp_path / "x.abc")]) == 0
     b = tmp_path / "b"
-    assert {p.name for p in b.iterdir()} == {"melody.abc", "melody.musicxml", "score.json", "crops", "manifest.json"}
+    assert {p.name for p in b.iterdir()} == {"melody.abc", "melody.musicxml", "melody.json", "score.json", "crops", "manifest.json"}
     m = json.loads((b / "manifest.json").read_text())
     assert m["source"]["file"] == "multi.pdf" and len(m["source"]["sha256"]) == 64
     assert [(c["page"], c["system"]) for c in m["crops"]] == [(1, 1), (1, 2), (2, 1)]

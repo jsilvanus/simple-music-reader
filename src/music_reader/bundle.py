@@ -1,6 +1,6 @@
 """One-call output for downstream consumers (e.g. anno-api): every format plus system images and a manifest.
 
-    <dir>/melody.abc  melody.musicxml  score.json  crops/page-P-system-S.png  crops/crops.json  manifest.json
+    <dir>/melody.abc  melody.musicxml  melody.json  score.json  crops/page-P-system-S.png  crops/crops.json  manifest.json
 
 The images reproduce the notation as printed (goal: show the original engraving); the ABC/MusicXML/JSON
 carry the recognised melody (goal: re-render it in any layout). The two are linked by page/system numbers.
@@ -22,7 +22,7 @@ def write_bundle(result: RecognitionResult, doc: Document, directory: str | Path
                  crop_dpi: float | None = 300) -> dict:
     d = Path(directory)
     d.mkdir(parents=True, exist_ok=True)
-    for fmt, name in (("abc", "melody.abc"), ("musicxml", "melody.musicxml"), ("json", "score.json")):
+    for fmt, name in (("abc", "melody.abc"), ("musicxml", "melody.musicxml"), ("json", "score.json"), ("melody", "melody.json")):
         (d / name).write_text(export(result.score, fmt, title=title), encoding="utf-8")
     crops = write_crops(result, doc, d / "crops", dpi=crop_dpi)
     score = result.score

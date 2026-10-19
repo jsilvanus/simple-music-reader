@@ -49,8 +49,12 @@ def parse_abc(text: str):
             continue
         else:
             body.append(line)
-    out, state = [], {}
-    for tok in re.findall(r"\|\]|\||[_=^]*[A-Ga-gz][,']*\d*/?\d*-?", " ".join(body)):
+    out, state, tri = [], {}, 0
+    text = re.sub(r"\{[^}]*\}", "", " ".join(body))  # grace notes take no time
+    for tok in re.findall(r"\(3|\|\]|\||[_=^]*[A-Ga-gz][,']*\d*/?\d*-?", text):
+        if tok == "(3":
+            tri = 3
+            continue
         if tok.startswith("|"):
             state = {}
             continue
@@ -58,6 +62,8 @@ def parse_abc(text: str):
         acc, letter, octs, num, slash, den, tie = m.groups()
         mult = Fraction(int(num) if num else 1, int(den) if den else (2 if slash else 1))
         dur = unit * mult
+        if tri:  # inside "(3": the written length sounds two thirds as long
+            dur, tri = dur * Fraction(2, 3), tri - 1
         if letter == "z":
             out.append(("rest", dur, False))
             continue
