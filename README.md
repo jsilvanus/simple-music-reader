@@ -17,7 +17,7 @@ Finland) with two goals in mind:
 | a) images of the liturgy notation | `--crops DIR`: one PNG per detected system (lyrics stay with their system), plus `crops.json` with page/system numbers and bounding boxes. Works from the staff geometry alone, so it does not depend on the melody being read correctly. |
 | b) notation that can be re-rendered in flexible layouts | `--format abc` / `musicxml` / `json`: the recognised melody as exact pitches and durations, with confidence and source positions. |
 
-`--bundle DIR` writes everything for one piece in one go (`melody.abc`, `melody.musicxml`, `score.json`, `crops/`,
+`--bundle DIR` writes everything for one piece in one go (`melody.abc`, `melody.musicxml`, `melody.json`, `score.json`, `crops/`,
 `manifest.json`). The manifest says whether the result `needs_review`, and why.
 
 **Status: first vertical slice.** It reads simple monophonic printed melodies on a treble staff and has been tested on
@@ -41,8 +41,10 @@ music-reader hymn.pdf --bundle out/hymn1 --staff 1
 ```
 
 Useful options: `--staff N` (which staff of each system carries the melody), `--meter`, `--key`, `--pages 1-3`,
-`--dpi`, `--strict` (exit status 2 on error-level diagnostics). Time-signature **digits are not read yet**: the meter is
-inferred from the measure lengths unless you give `--meter`, and a warning says so.
+`--voice top|bottom` (which voice of two on one staff), `--dpi`, `--strict` (exit status 2 on error-level
+diagnostics). The printed time signature is read when it is convincing; otherwise the meter is inferred from the measure
+lengths unless you give `--meter`, and a warning says so. `--format melody` writes `melody.json`
+(`music-reader.melody/1`), a small stable document for other programs. Reading is verified on generated scores only.
 
 Warnings go to standard error and, for ABC, into `%` comment lines at the top of the output. Nothing uncertain is
 corrected silently.
