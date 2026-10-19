@@ -27,6 +27,8 @@ class ClassicalBackend:
         selected = []
         key_candidates: list[tuple[int, int, int]] = []  # (fifths, page, system)
         ambiguous_systems = 0
+        by_clef = 0
+        chosen: list[int] = []
         time_sig_seen = False
         detected_meters: list[str] = []
         pages = options.pages or list(range(1, len(doc) + 1))
@@ -38,9 +40,14 @@ class ClassicalBackend:
             score.pages.append(info)
             result.pages.append(dbg)
             for si, group in enumerate(systems):
-                if options.staff is None and len(group) > 1:
-                    ambiguous_systems += 1
                 k = (options.staff or 1) - 1
+                if options.staff is None and len(group) > 1:
+                    treble = [i for i, r in enumerate(group) if r.clef == "treble"]
+                    if len(treble) == 1:  # a bass clef next to a treble clef: the melody is on the treble staff
+                        k = treble[0]
+                        by_clef += 1
+                    else:
+                        ambiguous_systems += 1
                 if k >= len(group):
                     score.diagnostics.append(Diagnostic("STAFF_NOT_FOUND", "error",
                         f"system has {len(group)} staves, cannot select staff {k + 1}", Source(pno, None, si)))
@@ -54,6 +61,7 @@ class ClassicalBackend:
                 if res.key_fifths is not None:
                     key_candidates.append((res.key_fifths, pno, si))
                 selected.append((res, pno, si))
+                chosen.append(k + 1)
                 for other in group:
                     if other is not res:
                         dbg.marks.extend({**m, "kind": "other-" + m["kind"]} for m in other.marks)
@@ -61,12 +69,20 @@ class ClassicalBackend:
             score.diagnostics.append(Diagnostic("AMBIGUOUS_MELODY_STAFF", "warning",
                 f"{ambiguous_systems} system(s) have several staves and no staff was chosen; the first staff is assumed to carry "
                 "the melody (use --staff N to choose)"))
+        staff_no = options.staff or (max(set(chosen), key=chosen.count) if chosen else 1)
+        if options.staff:
+            strategy, description = "explicit", f"staff {options.staff} of each system"
+        elif ambiguous_systems:
+            strategy, description = "assumed-first-staff", "staff 1 of each system (assumed; several staves present)"
+        elif by_clef:
+            strategy, description = "treble-clef", f"the treble-clef staff of each system (staff {staff_no} of {by_clef} two-staff system(s))"
+        else:
+            strategy, description = "assumed-first-staff", "staff 1 of each system"
         score.selection = {
-            "strategy": "explicit" if options.staff else "assumed-first-staff",
-            "staff": options.staff or 1,
+            "strategy": strategy,
+            "staff": staff_no,
             "ambiguous": bool(ambiguous_systems) and not options.staff,
-            "description": f"staff {options.staff or 1} of each system"
-            + ("" if options.staff else " (assumed; several staves present)" if ambiguous_systems else ""),
+            "description": description,
         }
         # key
         if options.key:
