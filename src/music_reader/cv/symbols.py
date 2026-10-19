@@ -109,7 +109,7 @@ def _head_like_orientation(region: np.ndarray) -> bool:
     mu20, mu02, mu11 = mo["mu20"] / mo["m00"], mo["mu02"] / mo["m00"], mo["mu11"] / mo["m00"]
     common = np.sqrt(max(0.0, (mu20 - mu02) ** 2 + 4 * mu11**2))
     l1, l2 = (mu20 + mu02 + common) / 2, (mu20 + mu02 - common) / 2
-    if l2 <= 0 or np.sqrt(l1 / l2) <= 1.25:
+    if l2 <= 0 or np.sqrt(l1 / l2) <= 1.4:
         return True
     theta = 0.5 * np.degrees(np.arctan2(2 * mu11, mu20 - mu02))
     return abs(theta) <= 40.0
@@ -132,6 +132,37 @@ def find_holes(bw: np.ndarray, sp: float) -> list[Head]:
         pad_x, pad_y = 0.25 * sp, 0.2 * sp
         out.append(Head(float(cents[i][0]), float(cents[i][1]), x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y, 0.6, True))
     return out
+
+
+def _on_beam(beams: np.ndarray, h: "Head") -> bool:
+    y0, y1 = max(0, int(h.cy - 2)), min(beams.shape[0], int(h.cy + 3))
+    x0, x1 = max(0, int(h.cx - 2)), min(beams.shape[1], int(h.cx + 3))
+    return bool((beams[y0:y1, x0:x1] > 0).any())
+
+
+def find_beams(res: np.ndarray, sp: float) -> np.ndarray:
+    """Mask of long, thick strokes of a staff-line-free image: beams, flat or slanted.
+
+    A beam survives an erosion that takes away stems, slurs and flags, is long, and is thin across (a note head is not)."""
+    d = max(2, int(round(0.3 * sp)))
+    core = cv2.erode(res, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d)))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(core, connectivity=8)
+    out = np.zeros_like(res)
+    for i in range(1, n):
+        x, y, w, h, a = (int(v) for v in stats[i])
+        if np.hypot(w, h) < 2.2 * sp:
+            continue
+        ys, xs = np.nonzero(lab[y : y + h, x : x + w] == i)
+        cov = np.cov(np.vstack([xs, ys])) if len(xs) > 2 else None
+        if cov is None:
+            continue
+        ev, vec = np.linalg.eigh(cov)
+        if ev[0] <= 0 or ev[1] / ev[0] < 16.0:  # length at least 4x the thickness
+            continue
+        if abs(vec[1, 1]) > abs(vec[0, 1]) * 0.85:  # steeper than about 40 degrees: a stem with its head, not a beam
+            continue
+        out[y : y + h, x : x + w][lab[y : y + h, x : x + w] == i] = 255
+    return cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d + 2, d + 2)))
 
 
 def longest_run(col: np.ndarray) -> int:
@@ -209,7 +240,7 @@ def _mark(res, kind, bbox, label="", conf=1.0):
 
 
 def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: int, system: int,
-                  holes: Optional[list[Head]] = None) -> StaffResult:
+                  holes: Optional[list[Head]] = None, beams: Optional[np.ndarray] = None) -> StaffResult:
     sp = staff.spacing
     res = StaffResult(staff)
     src = lambda c=None: Source(page, c.bbox if c else None, system, staff.index, c.id if c else None)  # noqa: E731
@@ -242,7 +273,10 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
 
     def heads_of(c):
         if c.id not in heads_cache:
-            heads_cache[c.id] = find_heads(c, sp)
+            found = find_heads(c, sp)
+            if beams is not None:  # a blob where a stem meets a beam (and a staff line crosses it) is not a head
+                found = [h for h in found if not _on_beam(beams, h)]
+            heads_cache[c.id] = found
         return heads_cache[c.id]
 
     def looks_like_time(c):
@@ -652,7 +686,10 @@ def _find_stem(c: Comp, h: Head, sp: float):
 
 
 def _count_flags(c: Comp, h: Head, direction: str, tip, sp: float) -> int:
-    """Count flag/beam strokes beside the stem near its tip."""
+    """Count flag/beam strokes beside the stem near its tip.
+
+    A beam is half a spacing thick and the next one starts a quarter spacing further in; on a coarse or blurred scan
+    the gap closes and two beams look like one run twice as thick, so a run counts as one stroke per 0.75 spacing."""
     sx, tip_y = tip
     m = c.mask
     best = 0
@@ -663,6 +700,10 @@ def _count_flags(c: Comp, h: Head, direction: str, tip, sp: float) -> int:
         y_tip = int(tip_y - c.y0)
         step = 1 if direction == "up" else -1  # walk from the tip toward the head
         n_runs, inrun, run_len = 0, False, 0
+
+        def close(run_len):
+            return max(1, int(round((run_len / sp + 0.25) / 0.75))) if run_len >= 0.15 * sp else 0
+
         for k in range(int(2.2 * sp)):
             y = y_tip + step * k
             if not 0 <= y < c.h:
@@ -671,11 +712,11 @@ def _count_flags(c: Comp, h: Head, direction: str, tip, sp: float) -> int:
                 run_len += 1
                 inrun = True
             else:
-                if inrun and run_len >= 0.15 * sp:
-                    n_runs += 1
+                if inrun:
+                    n_runs += close(run_len)
                 inrun, run_len = False, 0
-        if inrun and run_len >= 0.15 * sp:
-            n_runs += 1
+        if inrun:
+            n_runs += close(run_len)
         best = max(best, n_runs)
     return min(best, 3)
 

@@ -41,6 +41,8 @@ class StaffSpec:
     key_fifths: int = 0
     meter: Optional[str] = "4/4"
     clef: str = "treble"
+    beam_group_size: int = 2  # longest run of eighths/sixteenths joined by one beam (2 = pairs, as before)
+    max_slope: float = 0.0  # steepest beam (rise per unit of width); 0 draws flat beams, as before
     time_font: str = "Helvetica-Bold"  # font of the time-signature digits
     final: bool = False  # final double barline after the last measure
 
@@ -80,6 +82,14 @@ class _Drawer:
         if close:
             p.close()
         self.c.drawPath(p, stroke=1, fill=0)
+
+    def fill_poly(self, pts):
+        p = self.c.beginPath()
+        p.moveTo(pts[0][0], self.Y(pts[0][1]))
+        for x, y in pts[1:]:
+            p.lineTo(x, self.Y(y))
+        p.close()
+        self.c.drawPath(p, stroke=0, fill=1)
 
     def filled_rect(self, x0, y0, x1, y1):
         self.c.rect(x0, self.Y(y1), x1 - x0, y1 - y0, stroke=0, fill=1)
@@ -219,13 +229,22 @@ class _StaffLayout:
 
     def draw_events(self, items, bars):
         d, sp = self.d, self.sp
-        # beam pairs: consecutive eighth notes within a measure
-        beam = {}
-        for i in range(len(items) - 1):
-            a, b = items[i], items[i + 1]
-            if (a["m"] == b["m"] and i not in beam and (i - 1) not in beam and _is_eighth(a["it"]) and _is_eighth(b["it"])):
-                beam[i] = i + 1
-        beamed = set(beam) | set(beam.values())
+        # beam groups: consecutive eighth/sixteenth notes of one measure, at most four (``beam_groups`` off: pairs only)
+        groups, cur = [], []
+        for i, e in enumerate(items):
+            ok = _is_beamable(e["it"])
+            if ok and cur and (items[cur[-1]]["m"] != e["m"] or len(cur) >= self.spec.beam_group_size):
+                groups.append(cur)
+                cur = []
+            if ok:
+                cur.append(i)
+            elif cur:
+                groups.append(cur)
+                cur = []
+        if cur:
+            groups.append(cur)
+        groups = [g for g in groups if len(g) >= 2]
+        beamed = {i for g in groups for i in g}
         for i, e in enumerate(items):
             it, x = e["it"], e["x"]
             if isinstance(it, Rest):
@@ -252,39 +271,20 @@ class _StaffLayout:
         # stems / flags / beams
         for i, e in enumerate(items):
             it = e["it"]
-            if isinstance(it, Rest) or it.dur == "w":
+            if isinstance(it, Rest) or it.dur == "w" or i in beamed:
                 continue
             down = e["pos"] >= 4
-            if i in beam:
-                j = beam[i]
-                down = (e["pos"] + items[j]["pos"]) / 2 >= 4
-            elif i in beamed:
-                continue_down = None  # second of a pair, handled with the first
-                continue
             sw = 0.13 * sp
-            stems = [e] if i not in beam else [e, items[beam[i]]]
-            tips = []
-            for s in stems:
-                sx = s["x"] - 0.65 * sp + sw / 2 if down else s["x"] + 0.65 * sp - sw / 2
-                tip = s["y"] + (3.5 if down else -3.5) * sp
-                tips.append((sx, tip, s))
-            if i in beam:
-                tip_y = max(t[1] for t in tips) if down else min(t[1] for t in tips)
-                for sx, _t, s in tips:
-                    d.line(sx, s["y"], sx, tip_y, sw)
-                x_a, x_b = tips[0][0], tips[1][0]
-                if down:
-                    d.filled_rect(x_a - sw / 2, tip_y - 0.5 * sp, x_b + sw / 2, tip_y)
-                else:
-                    d.filled_rect(x_a - sw / 2, tip_y, x_b + sw / 2, tip_y + 0.5 * sp)
-            else:
-                sx, tip, s = tips[0]
-                d.line(sx, s["y"], sx, tip, sw)
-                nflags = {"q": 0, "h": 0, "e": 1, "s": 2}[it.dur]
-                for k in range(nflags):
-                    off = k * 0.75 * sp * (-1 if down else 1)  # further flags sit closer to the head
-                    ty = tip + off
-                    d.line(sx, ty, sx + 1.0 * sp, ty + (-1.7 if down else 1.7) * sp, 0.28 * sp)
+            sx = e["x"] - 0.65 * sp + sw / 2 if down else e["x"] + 0.65 * sp - sw / 2
+            tip = e["y"] + (3.5 if down else -3.5) * sp
+            d.line(sx, e["y"], sx, tip, sw)
+            nflags = {"q": 0, "h": 0, "e": 1, "s": 2}[it.dur]
+            for k in range(nflags):
+                off = k * 0.75 * sp * (-1 if down else 1)  # further flags sit closer to the head
+                ty = tip + off
+                d.line(sx, ty, sx + 1.0 * sp, ty + (-1.7 if down else 1.7) * sp, 0.28 * sp)
+        for g in groups:
+            self._beam_group(items, g)
         # ties
         for i, e in enumerate(items[:-1]):
             it = e["it"]
@@ -301,6 +301,49 @@ class _StaffLayout:
                 p.curveTo(x1 + (x2 - x1) * 0.2, self.d.Y(y0 + dy), x2 - (x2 - x1) * 0.2, self.d.Y(y0 + dy), x2, self.d.Y(y0))
                 self.d.c.drawPath(p, stroke=1, fill=0)
                 del up
+
+    def _beam_group(self, items, g):
+        """Stems and beams of one group; the beam follows the contour of the notes (slanted), at most ``max_slope``."""
+        d, sp = self.d, self.sp
+        sw = 0.13 * sp
+        down = sum(items[i]["pos"] for i in g) / len(g) >= 4
+        sign = 1 if down else -1
+        xs = [items[i]["x"] + (-0.65 * sp + sw / 2 if down else 0.65 * sp - sw / 2) for i in g]
+        tips = [items[i]["y"] + sign * 3.5 * sp for i in g]
+        slope = (tips[-1] - tips[0]) / (xs[-1] - xs[0])
+        slope = max(-self.spec.max_slope, min(self.spec.max_slope, slope))
+        # the line through the mean tip with that slope, pushed outwards until every stem is at least 3 spacings long
+        mx, my = sum(xs) / len(xs), sum(tips) / len(tips)
+
+        def line_y(x):
+            return my + slope * (x - mx)
+
+        shift = max(0.0, max(sign * ((items[i]["y"] + sign * 3.0 * sp) - line_y(x)) for i, x in zip(g, xs)))
+        my += sign * shift
+
+        def edge(x, inward):  # y of the beam's outer edge (inward=0) or a line `inward` further towards the heads
+            return line_y(x) - sign * inward
+
+        thick, gap = 0.5 * sp, 0.25 * sp
+        for i, x in zip(g, xs):
+            d.line(x, items[i]["y"], x, line_y(x), sw)
+        d.fill_poly([(xs[0] - sw / 2, edge(xs[0] - sw / 2, 0)), (xs[-1] + sw / 2, edge(xs[-1] + sw / 2, 0)),
+                     (xs[-1] + sw / 2, edge(xs[-1] + sw / 2, thick)), (xs[0] - sw / 2, edge(xs[0] - sw / 2, thick))])
+        # second beam: between neighbouring sixteenths; a lone sixteenth gets a stub towards its neighbour
+        is16 = [items[i]["it"].dur == "s" for i in g]
+        off = thick + gap
+        for k, sixteenth in enumerate(is16):
+            if not sixteenth:
+                continue
+            if k + 1 < len(g) and is16[k + 1]:
+                a, b = xs[k] - sw / 2, xs[k + 1] + sw / 2
+            elif k > 0 and not is16[k - 1] or (k + 1 == len(g)):
+                a, b = xs[k] - 0.9 * sp, xs[k] + sw / 2
+            elif k == 0 or not is16[k - 1]:
+                a, b = xs[k] - sw / 2, xs[k] + 0.9 * sp
+            else:
+                continue
+            d.fill_poly([(a, edge(a, off)), (b, edge(b, off)), (b, edge(b, off + thick)), (a, edge(a, off + thick))])
 
     def ledgers(self, x, pos):
         sp = self.sp
@@ -324,8 +367,8 @@ class _StaffLayout:
                 self.d.line(b, self.top, b, self.bottom, 0.12 * sp)
 
 
-def _is_eighth(it) -> bool:
-    return isinstance(it, Note) and it.dur == "e" and not it.dots
+def _is_beamable(it) -> bool:
+    return isinstance(it, Note) and it.dur in ("e", "s")
 
 
 def render_pdf(path, pages: list[list[SystemSpec]], sp: float = 5.0, title: str = "Esimerkkivirsi",

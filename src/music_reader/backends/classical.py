@@ -146,12 +146,13 @@ class ClassicalBackend:
         residual, ledgers = cvstaff.remove_ledger_lines(residual, staves)
         comps = cvsym.extract_components(residual, sp_med)
         by_staff = _assign(comps, staves)
-        holes = cvsym.find_holes(bw, sp_med)
+        beams = cvsym.find_beams(residual, sp_med)
+        holes = cvsym.find_holes(cv2.bitwise_and(bw, cv2.bitwise_not(beams)), sp_med)
         systems = []
         for si, group in enumerate(groups):
             results = []
             for s in group:
-                r = cvsym.analyze_staff(s, by_staff[s.uid], ledgers, pno, si, holes)
+                r = cvsym.analyze_staff(s, by_staff[s.uid], ledgers, pno, si, holes, beams)
                 results.append(r)
             systems.append(results)
             info.systems.append(SystemInfo(si, [StaffInfo(s.index, s.lines, s.x0, s.x1, s.spacing, r.clef, r.clef_confirmed)
