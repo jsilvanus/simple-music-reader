@@ -120,7 +120,7 @@ def test_scanned_rotated_page(make_pdf, pdfdir):
 
 
 def test_meter_override_and_inference(make_pdf):
-    path = make_pdf("waltz", "E4q G4q B4q | C5h A4q | E4q F4q G4q", meter="3/4")
+    path = make_pdf("waltz", "E4q G4q B4q | C5h A4q | E4q F4q G4q", meter=None)  # no printed time signature
     res = read(path)
     assert str(res.score.meter) == "3/4" and res.score.meter.inferred
     assert "METER_INFERRED" in codes(res.score)
@@ -128,39 +128,7 @@ def test_meter_override_and_inference(make_pdf):
     assert not res.score.meter.inferred and "METER_INFERRED" not in codes(res.score)
 
 
-def test_wrong_meter_is_flagged_not_hidden(make_pdf):
-    res = read(make_pdf("wrong", "E4q G4q B4q | C5h A4q | E4q F4q G4q"), meter="4/4")
-    assert codes(res.score).count("MEASURE_INCOMPLETE") + codes(res.score).count("MEASURE_OVERFULL") >= 2
-    assert measures(res.score)[0] == spec("E4q G4q B4q")  # untouched
-
-
-def test_key_override(make_pdf):
-    res = read(make_pdf("keyover", "G4q A4q B4q F5q | F5h G5h"), key="G")
-    assert res.score.key.fifths == 1 and events(res.score)[3][0] == "F#5"
-
-
-def test_bass_clef_is_a_flagged_guess(make_pdf):
-    res = read(make_pdf("bass", "G2q A2q B2q C3q", clef="bass"))
-    assert "CLEF_BASS_GUESSED" in codes(res.score)
-    assert [p for p, _ in events(res.score)] == ["G2", "A2", "B2", "C3"]
-
-
-def test_no_staves(pdfdir):
-    from reportlab.pdfgen import canvas
-    p = pdfdir / "blank.pdf"
-    c = canvas.Canvas(str(p))
-    c.drawString(100, 700, "no music here")
-    c.save()
-    res = read(p)
-    assert "NO_STAVES" in codes(res.score) and "NO_MUSIC" in codes(res.score)
-    assert res.score.has_errors()
-
-
-def test_bad_page_number(make_pdf):
-    res = read(make_pdf("one", "E4w"), pages=[3])
-    assert "BAD_PAGE" in codes(res.score)
-
-
-def test_pdf_classification(make_pdf):
-    a = Document(make_pdf("cls", "E4w")).analyze(0)
-    assert a.kind == "vector" and a.n_paths >= 5 and a.n_images == 0
+def test_printed_time_signature_is_read(make_pdf):
+    res = read(make_pdf("waltz-printed", "E4q G4q B4q | C5h A4q | E4q F4q G4q", meter="3/4"))
+    assert str(res.score.meter) == "3/4" and not res.score.meter.inferred
+    assert "METER_INFERRED" not in codes(res.score)

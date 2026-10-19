@@ -41,6 +41,7 @@ class StaffSpec:
     key_fifths: int = 0
     meter: Optional[str] = "4/4"
     clef: str = "treble"
+    time_font: str = "Helvetica-Bold"  # font of the time-signature digits
     final: bool = False  # final double barline after the last measure
 
 
@@ -142,11 +143,18 @@ class _StaffLayout:
     def time_signature(self, x):
         if not self.spec.meter:
             return x
+        d, c, sp = self.d, self.d.c, self.sp
+        if self.spec.meter in ("C", "C|"):
+            cx, cy, r = x, self.ypos(4), 0.95 * sp
+            pts = [(cx + r * math.cos(math.radians(a)), cy + 1.05 * r * math.sin(math.radians(a))) for a in range(40, 321, 10)]
+            d.poly(pts, 0.35 * sp)
+            if self.spec.meter == "C|":
+                d.line(cx, self.ypos(8.3), cx, self.ypos(-0.3), 0.18 * sp)
+            return x + 1.6 * sp
         num, den = self.spec.meter.split("/")
-        c, sp = self.d.c, self.sp
-        c.setFont("Helvetica-Bold", 2.7 * sp)
-        c.drawCentredString(x, self.d.Y(self.ypos(4.05)), num)
-        c.drawCentredString(x, self.d.Y(self.ypos(0.05)), den)
+        c.setFont(self.spec.time_font, 2.7 * sp)
+        c.drawCentredString(x, d.Y(self.ypos(4.05)), num)
+        c.drawCentredString(x, d.Y(self.ypos(0.05)), den)
         return x + 1.6 * sp
 
     def sharp(self, x, y):

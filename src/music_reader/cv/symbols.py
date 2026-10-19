@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from ..ir import Diagnostic, Source
+from . import digits as cvdigits
 from .staff import Ledger, Staff
 
 BASE_TREBLE = 4 * 7 + 2  # E4: bottom line of a treble staff, as a diatonic number
@@ -197,6 +198,7 @@ class StaffResult:
     key_fifths: Optional[int] = None
     time_sig_seen: bool = False
     time_signature: Optional[str] = None
+    time_signature_confidence: float = 0.0
     items: list[Item] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     marks: list[dict] = field(default_factory=list)  # for debug rendering
@@ -251,6 +253,8 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
         c = tail[idx]
         if c.x0 - last_x1 > 3.0 * sp:
             break
+        if _read_time_block(tail, idx, last_x1, staff) is not None:
+            break  # a narrow digit (1) looks like a flat; what follows reads as a time signature
         kind = classify_accidental(c, sp)
         if kind in ("#", "b"):
             nxt = tail[idx + 1] if idx + 1 < len(tail) else None
@@ -271,18 +275,20 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
     else:
         res.key_fifths = 0
     header_end = last_x1
+    read = _read_time_block(tail, idx, header_end, staff) if idx < len(tail) else None
     if idx < len(tail):
         s0 = tail[idx]
-        if s0.x0 - header_end <= 3.0 * sp and looks_like_time(s0):
-            res.time_sig_seen = True  # two touching digits or a common/cut-time glyph
-            if _is_cut_time(s0, sp):
-                res.time_signature = "2/2"
-                _mark(res, "time", s0.bbox, "cut time 2/2")
-            else:
-                _mark(res, "time", s0.bbox, "time signature (digits not read)")
+        if read is not None:
+            text, conf, label, bbox, header_end, used = read
+            res.time_sig_seen, res.time_signature, res.time_signature_confidence = True, text, conf
+            _mark(res, "time", bbox, label, conf)
+            idx += used
+        elif s0.x0 - header_end <= 3.0 * sp and looks_like_time(s0):
+            res.time_sig_seen = True  # two touching digits whose reading failed
+            _mark(res, "time", s0.bbox, "time signature (digits not read)")
             header_end = s0.x1
             idx += 1
-    if idx + 1 < len(tail):
+    if res.time_signature is None and idx + 1 < len(tail):
         a, b = tail[idx], tail[idx + 1]
         if (a.x0 - header_end <= 3.0 * sp and 1.2 * sp <= a.h <= 2.7 * sp and 1.2 * sp <= b.h <= 2.7 * sp
                 and abs(a.cx - b.cx) <= 0.6 * sp and a.cy < staff.lines[2] < b.cy):
@@ -290,42 +296,6 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             _mark(res, "time", (min(a.x0, b.x0), a.y0, max(a.x1, b.x1), b.y1), "time signature (digits not read)")
             header_end = max(a.x1, b.x1)
             idx += 2
-    # Temporary targeted diagnostics for time-signature recognition: report nearby
-    # components and the shape metrics for any cut-time-sized glyph.
-    if res.time_sig_seen and res.time_signature is None:
-        nearby = tail[max(0, idx - 2):idx + 5]
-        details = []
-        for comp in nearby:
-            detail = (
-                f"id={comp.id} x={(comp.x0 - staff.x0) / sp:.1f}sp "
-                f"y={(comp.cy - staff.lines[2]) / sp:+.1f}sp "
-                f"size={comp.w / sp:.1f}x{comp.h / sp:.1f}sp "
-                f"cut={_is_cut_time(comp, sp)}"
-            )
-            if 2.8 * sp <= comp.h <= 4.4 * sp and 0.65 * sp <= comp.w <= 2.2 * sp:
-                x0, x1 = int(0.2 * comp.w), max(int(0.2 * comp.w) + 1, int(0.8 * comp.w))
-                central_run = 0
-                max_drift = max(2, int(round(0.18 * comp.h)))
-                for drift in range(-max_drift, max_drift + 1):
-                    for origin in range(x0, x1):
-                        run = 0
-                        for y in range(comp.h):
-                            x = round(origin + drift * y / max(1, comp.h - 1))
-                            if x0 <= x < x1 and comp.mask[y, x]:
-                                run += 1
-                                central_run = max(central_run, run)
-                            else:
-                                run = 0
-                left = comp.mask[:, :max(1, int(0.3 * comp.w))]
-                right = comp.mask[:, min(comp.w - 1, int(0.78 * comp.w)):]
-                left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
-                right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
-                detail += (
-                    f" metrics=central:{central_run}/{comp.h}"
-                    f",left:{left_run}/{comp.h},right:{right_run}/{comp.h}"
-                )
-            details.append(detail)
-        diag("TIME_SIGNATURE_COMPONENTS", "info", "; ".join(details))
 
     content = tail[idx:]
 
@@ -442,6 +412,105 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
 
 
 
+TIME_MIN_SCORE = 0.65  # mean digit similarity below which a reading is not trusted
+TIME_MIN_MARGIN = 0.003  # lead over the next valid reading
+
+
+def _time_cluster(tail: list[Comp], idx: int, header_end: float, staff: Staff) -> list[Comp]:
+    """Components that may make up a time signature: the next ones after the key signature that stand close together
+    inside the staff, as tall together as two digits."""
+    sp = staff.spacing
+    lo, hi = staff.top - 0.6 * sp, staff.bottom + 0.6 * sp
+
+    def fits(c):
+        return c.y0 >= lo and c.y1 <= hi and c.w <= 2.4 * sp and c.h <= 4.6 * sp
+
+    if idx >= len(tail) or tail[idx].x0 - header_end > 3.0 * sp or not fits(tail[idx]):
+        return []
+    cluster = [tail[idx]]
+    k = idx + 1
+    while k < len(tail) and fits(tail[k]) and tail[k].x0 - max(c.x1 for c in cluster) <= 0.5 * sp:
+        cluster.append(tail[k])
+        k += 1
+    # drop trailing components (a note after the time signature) until the rest is as tall as two digits, around the middle line
+    while cluster:
+        y0, y1 = min(c.y0 for c in cluster), max(c.y1 for c in cluster)
+        if 3.0 * sp <= y1 - y0 <= 4.6 * sp and abs((y0 + y1) / 2 - staff.lines[2]) <= 0.7 * sp:
+            return cluster
+        cluster.pop()
+    return []
+
+
+def _read_time_block(tail: list[Comp], idx: int, header_end: float, staff: Staff):
+    """Recognise a common-time, cut-time or stacked-digit time signature starting at tail[idx].
+
+    Returns (meter text, confidence, label, bbox, x of its right edge, components used) or None."""
+    sp = staff.spacing
+    cluster = _time_cluster(tail, idx, header_end, staff)
+    first = tail[idx] if idx < len(tail) else None
+    if first is not None and first.x0 - header_end <= 3.0 * sp:
+        if _is_common_time(first, staff):
+            return "4/4", 0.8, "common time 4/4", first.bbox, first.x1, 1
+        if len(cluster) == 1 and _is_cut_time(first, sp):
+            return "2/2", 0.8, "cut time 2/2", first.bbox, first.x1, 1
+    if not cluster:
+        return None
+    x0, y0 = min(c.x0 for c in cluster), min(c.y0 for c in cluster)
+    x1, y1 = max(c.x1 for c in cluster), max(c.y1 for c in cluster)
+    canvas = np.zeros((y1 - y0, x1 - x0), bool)
+    for c in cluster:
+        canvas[c.y0 - y0 : c.y1 - y0, c.x0 - x0 : c.x1 - x0] |= c.mask
+    t = int(np.ceil(staff.thickness)) + 1
+    bands = [(int(round(y)) - y0 - t // 2, int(round(y)) - y0 + t // 2) for y in staff.lines]
+    _bridge_bands(canvas, bands)  # the flat stroke of a 2, 5 or 6 lying on a staff line went with the line
+    # the two rows meet around the middle line: cut at the emptiest row near it (touching digits join at one point)
+    mid = int(round(staff.lines[2])) - y0
+    ink = canvas.sum(axis=1)
+    gaps = [r for r in range(max(1, int(mid - 0.6 * sp)), min(canvas.shape[0] - 1, int(mid + 0.6 * sp)) + 1) if ink[r] == 0]
+    if gaps:
+        mid = min(gaps, key=lambda r: abs(r - mid))
+    else:  # the rows touch: cut where they are joined, the thinnest row close to the middle line
+        near = range(max(1, int(mid - 0.3 * sp)), min(canvas.shape[0] - 1, int(mid + 0.3 * sp)) + 1)
+        if not near:
+            return None
+        mid = int(min(near, key=lambda r: (ink[r], abs(r - mid))))
+    up = tuple((b0, min(b1, mid - 1)) for b0, b1 in bands if b0 < mid)
+    down = tuple((max(b0, mid) - mid, b1 - mid) for b0, b1 in bands if b1 >= mid)
+    reading = cvdigits.read_time_signature(canvas[:mid], canvas[mid:], up, down)
+    if reading is None or reading.score < TIME_MIN_SCORE or reading.margin < TIME_MIN_MARGIN:
+        return None
+    return reading.text, round(min(1.0, reading.score), 2), f"time signature {reading.text}", (x0, y0, x1, y1), x1, len(cluster)
+
+
+def _bridge_bands(canvas: np.ndarray, bands: list[tuple[int, int]], reach: int = 2) -> None:
+    """Redraw the rows of each staff-line band: ink only where there is ink on both sides of the band (within ``reach``
+    rows). That gives back a stroke thicker than the line that was erased with it (the foot of a 6, the bar of a 2) and
+    clears the stubs of the line itself that the line removal left beside a stroke. In place."""
+    h = canvas.shape[0]
+    for b0, b1 in bands:
+        if b0 < 1 or b1 > h - 2 or b0 > b1:
+            continue
+        above = canvas[max(0, b0 - reach) : b0].any(axis=0)
+        below = canvas[b1 + 1 : min(h, b1 + 1 + reach)].any(axis=0)
+        canvas[b0 : b1 + 1] = (above & below)[None, :]
+
+
+def _is_common_time(c: Comp, staff: Staff) -> bool:
+    """The C sign: one open curve, a long left spine, no ink in the middle of its right side, no hole, no cut stroke."""
+    sp = staff.spacing
+    if not (2.0 * sp <= c.h <= 3.6 * sp and 0.7 * c.h <= c.w <= 1.5 * c.h and abs(c.cy - staff.lines[2]) <= 0.7 * sp):
+        return False
+    m = c.mask
+    h, w = m.shape
+    if cvdigits.hole_count(m, min_area=max(2.0, 0.004 * h * h)) > 0:
+        return False
+    left = max((longest_run(m[:, x]) for x in range(max(1, int(0.3 * w)))), default=0)
+    mid_right = m[int(0.35 * h) : int(0.65 * h), int(0.7 * w) :]
+    top_right, bottom_right = m[: int(0.3 * h), int(0.5 * w) :], m[int(0.7 * h) :, int(0.5 * w) :]
+    return bool(left >= 0.5 * h and not mid_right.any() and top_right.any() and bottom_right.any()
+                and not _is_cut_time(c, sp))
+
+
 def _is_cut_time(c: Comp, sp: float) -> bool:
     """Recognize a C-like alla breve glyph crossed by a near-vertical stroke.
 
@@ -449,7 +518,7 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
     a connected component, so test those shapes separately.
     """
     h, w = c.mask.shape
-    if not (2.8 * sp <= c.h <= 4.4 * sp):
+    if not (2.8 * sp <= c.h <= 4.8 * sp):
         return False
 
     # A disconnected slash is tall and narrow. Check it before applying the
@@ -497,7 +566,7 @@ def _is_cut_time(c: Comp, sp: float) -> bool:
     right = c.mask[:, min(w - 1, int(0.78 * w)):]
     left_run = max((longest_run(left[:, x]) for x in range(left.shape[1])), default=0)
     right_run = max((longest_run(right[:, x]) for x in range(right.shape[1])), default=0)
-    return (central_run >= 0.72 * h and left_run >= 0.55 * h
+    return (central_run >= 0.9 * h and left_run >= 0.3 * h
             and right_run < 0.72 * h)
 
 
