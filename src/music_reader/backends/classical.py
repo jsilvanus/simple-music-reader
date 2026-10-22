@@ -106,9 +106,19 @@ class ClassicalBackend:
             score.meter_source = "printed"
             bars = infer_meter(score.voices[0].measures)
             if bars is not None and bars.measure_duration != score.meter.measure_duration:
-                score.diagnostics.append(Diagnostic("TIME_SIGNATURE_MISMATCH", "warning",
-                    f"the printed time signature was read as {score.meter} but most measures hold {bars.measure_duration} "
-                    f"(as {bars}); the digits may be misread (use --meter to set it)"))
+                matching_bars = sum(1 for m in score.voices[0].measures if m.events and m.duration == bars.measure_duration)
+                matching_printed = sum(1 for m in score.voices[0].measures if m.events and m.duration == score.meter.measure_duration)
+                total_bars = sum(1 for m in score.voices[0].measures if m.events)
+                if total_bars >= 4 and matching_bars >= 0.6 * total_bars and matching_printed <= 1:
+                    score.diagnostics.append(Diagnostic("TIME_SIGNATURE_MISMATCH", "warning",
+                        f"the printed time signature was read as {score.meter} but {matching_bars}/{total_bars} measures hold "
+                        f"{bars.measure_duration} (as {bars}); corrected to {bars}"))
+                    score.meter = Meter(bars.numerator, bars.denominator, inferred=True)
+                    score.meter_source = "reconciled"
+                else:
+                    score.diagnostics.append(Diagnostic("TIME_SIGNATURE_MISMATCH", "warning",
+                        f"the printed time signature was read as {score.meter} but most measures hold {bars.measure_duration} "
+                        f"(as {bars}); the digits may be misread (use --meter to set it)"))
             if any(m != detected_meters[0] for m in detected_meters[1:]):
                 score.diagnostics.append(Diagnostic("TIME_SIGNATURE_CHANGE", "warning",
                     f"time signature differs between systems; the first ({detected_meters[0]}) is used"))

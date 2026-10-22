@@ -52,3 +52,26 @@ def test_suspicious_jump_and_range_and_confidence():
 
 def test_no_music():
     assert codes(Score()) == ["NO_MUSIC"]
+
+
+def test_infer_meter_rejects_bizarre_chant_durations():
+    from music_reader.assemble import infer_meter
+    from music_reader.ir import Measure
+    # Irregular or chant bars of length 55/12 or 18/4
+    bars = [Measure(0, [n('C4', '18/4')]), Measure(1, [n('D4', '18/4')]), Measure(2, [n('E4', '18/4')])]
+    assert infer_meter(bars) is None
+
+
+def test_reconcile_meter_from_measures_in_classical():
+    from music_reader.backends.classical import ClassicalBackend, RecognitionOptions
+    from music_reader.ir import Score, Voice, Measure
+    from music_reader.cv.symbols import StaffResult, Item
+    from types import SimpleNamespace as NS
+
+    backend = ClassicalBackend()
+    # 6 bars of 6/4 (duration 3/2) with printed 5/4
+    measures = [Measure(i, [n('C4', '1/4'), n('D4', '1/4'), n('E4', '1/4'), n('F4', '1/4'), n('G4', '1/4'), n('A4', '1/4')]) for i in range(6)]
+    doc = NS(analyze=lambda p: NS(kind='vector', music_fonts=[]), num_pages=1)
+    # Test infer_meter directly on these 6 measures
+    from music_reader.assemble import infer_meter
+    assert str(infer_meter(measures)) == '6/4'

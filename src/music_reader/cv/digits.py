@@ -173,7 +173,7 @@ def _fit_rows(mask: np.ndarray, bands: tuple[tuple[int, int], ...]):
     return mask[ya : yb + 1, xs.min() : xs.max() + 1], rel
 
 
-def _candidates(row: np.ndarray, valid: tuple[int, ...], bands, n_best: int = 4) -> list[tuple[int, float]]:
+def _candidates(row: np.ndarray, valid: tuple[int, ...], bands, n_best: int = 8) -> list[tuple[int, float]]:
     """Numbers a row of digits can be, with the mean digit score."""
     crop, rel = _fit_rows(row, bands)
     out_parts = []

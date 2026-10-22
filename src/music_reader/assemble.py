@@ -18,9 +18,14 @@ def infer_meter(measures: list[Measure]) -> Optional[Meter]:
     if not full:
         return None
     s = Counter(full).most_common(1)[0][0]
-    if s.denominator <= 4:
+    # Standard meters are between 2/4 and 12/4 (0.5 to 3.0) with standard denominators
+    if not (Fraction(1, 2) <= s <= Fraction(3, 1)):
+        return None
+    if s.denominator in (1, 2, 4):
         return Meter(int(s * 4), 4, inferred=True)
-    return Meter(s.numerator, s.denominator, inferred=True)
+    if s.denominator == 8:
+        return Meter(s.numerator, 8, inferred=True)
+    return None
 
 
 def build_voice(selected: list[tuple[StaffResult, int, int]], key: KeySignature, diagnostics: list[Diagnostic]) -> Voice:
