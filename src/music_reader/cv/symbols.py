@@ -154,7 +154,7 @@ def find_holes(bw: np.ndarray, sp: float) -> list[Head]:
                 out.append(Head(float(cents[i][0]), float(cents[i][1]), x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y, 0.6, True))
                 continue
         # Split half-hole cut by a staff line
-        if 0.05 * sp * sp <= a <= 0.5 * sp * sp and 0.35 * sp <= w <= 1.3 * sp and h <= 0.6 * sp:
+        if 0.015 * sp * sp <= a <= 0.5 * sp * sp and 0.15 * sp <= w <= 1.3 * sp and h <= 0.6 * sp:
             small_split.append((x, y, w, h, a, float(cents[i][0]), float(cents[i][1])))
 
     # Pair up split half-holes across staff lines
@@ -445,7 +445,7 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
     ties: list[Comp] = []
     frags: list[Comp] = []
     # hollow heads found as enclosed white regions, attached to the component that holds their stem
-    my_holes = [h for h in (holes or []) if staff.top - 5 * sp <= h.cy <= staff.bottom + 5 * sp and h.cx > header_end]
+    my_holes = [h for h in (holes or []) if staff.top - 5 * sp <= h.cy <= staff.bottom + 5 * sp and h.cx > header_end and not any(abs(h.cx - b.cx) <= 0.6 * sp for b in bars if b.h >= 2.5 * sp)]
     comp_heads: dict[int, list[Head]] = {c.id: ([] if classify_accidental(c, sp) else list(heads_of(c))) for c in content}
     standalone: list[Head] = []
     for hole in my_holes:
@@ -931,12 +931,16 @@ def _make_note(staff: Staff, c: Optional[Comp], h: Head, base: int, ledgers, res
         return None
     pos, pos_f = found
     conf = max(0.0, 1.0 - 2.0 * abs(pos_f - pos))
+    if conf < 0.20:
+        return None
     hollow = h.hollow
     stem, tip_len, tip_pt = _find_stem(c, h, sp) if c is not None else (None, 0, None)
     flags = _count_flags(c, h, stem, tip_pt, sp) if stem else 0
     if stem is None:
         dur = Fraction(1) if hollow else Fraction(1, 4)
         if not hollow:
+            if conf < 0.25:
+                return None
             conf = min(conf, 0.2)
             res.diagnostics.append(Diagnostic("STEMLESS_FILLED_HEAD", "warning", "filled note head without a stem; read as a quarter note", src(c)))
     elif hollow:

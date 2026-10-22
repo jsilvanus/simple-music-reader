@@ -322,3 +322,49 @@ def test_key_accs_not_interrupted_by_broken_sharp():
         assert r.key_fifths == 2
     finally:
         cvsym.classify_accidental = orig_classify
+
+
+def test_make_note_rejects_low_confidence_noise():
+    from music_reader.cv.symbols import _make_note, Head, StaffResult, Source
+    from types import SimpleNamespace as NS
+    sp = 10.0
+    staff = NS(index=0, lines=[20.0, 30.0, 40.0, 50.0, 60.0], spacing=10.0, top=20.0, bottom=60.0, x0=10.0, x1=300.0, uid=0, thickness=1.5, height=40.0, position=lambda y: (60.0 - y) / 5.0, y_of=lambda p: 60.0 - p * 5.0)
+    # Head at cy=17.75: pos_f = (60 - 17.75)/5 = 8.45 -> pos=8, |pos_f - pos| = 0.45 -> conf = max(0, 1 - 2*0.45) = 0.10 < 0.20
+    h_noise = Head(100.0, 17.75, 95.0, 14.0, 105.0, 21.5, 0.5)
+    res = StaffResult(staff)
+    src = lambda c=None: Source(1, c.bbox if c else None, 0, 0, c.id if c else None)
+    it = _make_note(staff, None, h_noise, 28, [], res, src)
+    assert it is None
+
+
+def test_analyze_staff_ignores_holes_inside_double_barline():
+    from music_reader.cv.symbols import analyze_staff, Comp, Head
+    from types import SimpleNamespace as NS
+    sp = 10.0
+    staff = NS(index=0, lines=[20.0, 30.0, 40.0, 50.0, 60.0], spacing=10.0, top=20.0, bottom=60.0, x0=10.0, x1=300.0, uid=0, thickness=1.5, height=40.0, position=lambda y: (60.0 - y) / 5.0, y_of=lambda p: 60.0 - p * 5.0)
+    clef = Comp(0, 15, 10, 35, 70, 400, np.ones((60, 20), bool))
+    # Double barline at end of staff: thin stroke at x=250, thick stroke at x=256
+    bar_thin = Comp(1, 250, 20, 252, 60, 80, np.ones((40, 2), bool))
+    bar_thick = Comp(2, 255, 20, 260, 60, 200, np.ones((40, 5), bool))
+    # Hole between barline strokes at x=253.5
+    gap_hole = Head(253.5, 40.0, 252.0, 35.0, 255.0, 45.0, 0.6, True)
+    
+    r = analyze_staff(staff, [clef, bar_thin, bar_thick], [], 1, 0, [gap_hole], None, "top")
+    # Gap hole must NOT be accepted as a note
+    assert not any(it.kind == "note" for it in r.items)
+
+
+def test_find_holes_merges_thin_slit_split_half_hole():
+    from music_reader.cv.symbols import find_holes
+    import cv2
+    sp = 12.0
+    # Create an image with a hollow ellipse cut across by a horizontal staff line (gap = 2px)
+    bw = np.zeros((60, 60), dtype=np.uint8)
+    # Ring
+    cv2.ellipse(bw, (30, 30), (7, 6), 0, 0, 360, 255, 2)
+    # Cut by staff line through row 30: ink at row 29..31
+    bw[29:32, 20:40] = 255
+    # The bottom cavity is very small slit
+    holes = find_holes(bw, sp)
+    assert len(holes) == 1
+    assert abs(holes[0].cx - 30) <= 2.0
