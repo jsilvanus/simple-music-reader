@@ -249,3 +249,32 @@ def test_flag_hole_rejected_on_stem_with_solid_head():
         assert not notes[0].hollow
     finally:
         cvsym.find_heads = orig_find_heads
+
+
+def test_split_hole_across_staff_line_is_paired():
+    from music_reader.cv.symbols import find_holes
+    sp = 10.0
+    bw = np.zeros((100, 100), dtype=np.uint8)
+    # A black staff line at y=48..50
+    bw[48:50, :] = 255
+    # A ring of a hollow notehead on line 48..50:
+    # Outer ellipse filled with 255, inner ellipse with 0 (white hole)
+    # The staff line crosses the inner white hole, cutting it into two halves
+    import cv2
+    cv2.ellipse(bw, (50, 49), (7, 5), 35, 0, 360, 255, 2)
+    # Line still crosses inside:
+    bw[48:50, 45:55] = 255
+    holes = find_holes(bw, sp)
+    assert len(holes) == 1
+    assert abs(holes[0].cx - 50) <= 2.0
+    assert abs(holes[0].cy - 49) <= 2.5
+
+
+def test_on_beam_rejects_junction_blob_touching_beam():
+    from music_reader.cv.symbols import _on_beam, Head
+    beams = np.zeros((100, 100), dtype=np.uint8)
+    # A horizontal beam at y=20..26, x=30..80
+    beams[20:26, 30:80] = 255
+    # A junction blob from stem at x=50, y=25..34 (cy=29.5)
+    blob_head = Head(50.0, 29.5, 46.0, 25.0, 54.0, 34.0, 1.0, False)
+    assert _on_beam(beams, blob_head)

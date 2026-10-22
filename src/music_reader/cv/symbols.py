@@ -102,7 +102,7 @@ def find_heads(c: Comp, sp: float) -> list[Head]:
                 heads.append(Head(c.x0 + x + w / 2 - pad, c.y0 + (ya + yb) / 2 - pad, c.x0 + x - pad, c.y0 + ya - pad,
                                   c.x0 + x + w - pad, c.y0 + yb - pad, ink, ink < 0.8))
             continue
-        if not (0.55 * sp * sp <= a <= 2.4 * sp * sp and 0.75 * sp <= w <= 2.0 * sp and 0.75 * sp <= h <= 1.7 * sp):
+        if not (0.45 * sp * sp <= a <= 2.4 * sp * sp and 0.70 * sp <= w <= 2.0 * sp and 0.70 * sp <= h <= 1.7 * sp):
             continue
         region = (lab == i).astype(np.uint8)
         if not _head_like_orientation(region):
@@ -140,26 +140,58 @@ def find_holes(bw: np.ndarray, sp: float) -> list[Head]:
     """Hollow note heads found as small enclosed white regions of the page *with* staff lines in place.
 
     A hollow head sitting between two lines is tangent to both, so removing the lines breaks its ring;
-    the white inside survives, which is why heads are also searched for this way.
+    the white inside survives, which is why heads are also searched for this way. For a hollow head
+    sitting ON a line, the line cuts its hole in two; the two halves are merged across the line.
     """
     n, lab, stats, cents = cv2.connectedComponentsWithStats(255 - bw, connectivity=4)
     out = []
+    small_split = []
+    pad_x, pad_y = 0.25 * sp, 0.2 * sp
     for i in range(1, n):
         x, y, w, h, a = (int(v) for v in stats[i])
-        if not (0.2 * sp * sp <= a <= 0.9 * sp * sp and 0.5 * sp <= w <= 1.3 * sp and 0.25 * sp <= h <= 0.8 * sp):
+        if (0.2 * sp * sp <= a <= 0.9 * sp * sp and 0.5 * sp <= w <= 1.3 * sp and 0.25 * sp <= h <= 0.8 * sp):
+            if 0.48 <= a / (w * h) <= 0.9 and _solidity(lab[y : y + h, x : x + w] == i) >= 0.88:
+                out.append(Head(float(cents[i][0]), float(cents[i][1]), x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y, 0.6, True))
+                continue
+        # Split half-hole cut by a staff line
+        if 0.05 * sp * sp <= a <= 0.5 * sp * sp and 0.35 * sp <= w <= 1.3 * sp and h <= 0.6 * sp:
+            small_split.append((x, y, w, h, a, float(cents[i][0]), float(cents[i][1])))
+
+    # Pair up split half-holes across staff lines
+    used = set()
+    for j, h1 in enumerate(small_split):
+        if j in used:
             continue
-        if not 0.48 <= a / (w * h) <= 0.9:
-            continue
-        if _solidity(lab[y : y + h, x : x + w] == i) < 0.88:
-            continue  # the pocket between two heads, a head and a stem or a beam is concave; the inside of a ring is not
-        pad_x, pad_y = 0.25 * sp, 0.2 * sp
-        out.append(Head(float(cents[i][0]), float(cents[i][1]), x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y, 0.6, True))
+        for k in range(j + 1, len(small_split)):
+            if k in used:
+                continue
+            h2 = small_split[k]
+            if abs(h1[5] - h2[5]) > 0.6 * sp:
+                continue
+            top_h, bot_h = (h1, h2) if h1[1] < h2[1] else (h2, h1)
+            gap = bot_h[1] - (top_h[1] + top_h[3])
+            if not (0 <= gap <= 0.4 * sp):
+                continue
+            tot_x0 = min(top_h[0], bot_h[0])
+            tot_x1 = max(top_h[0] + top_h[2], bot_h[0] + bot_h[2])
+            tot_y0 = top_h[1]
+            tot_y1 = bot_h[1] + bot_h[3]
+            tot_w = tot_x1 - tot_x0
+            tot_h = tot_y1 - tot_y0
+            tot_a = top_h[4] + bot_h[4] + gap * min(top_h[2], bot_h[2])
+            if (0.2 * sp * sp <= tot_a <= 0.9 * sp * sp and 0.5 * sp <= tot_w <= 1.3 * sp and 0.35 * sp <= tot_h <= 1.0 * sp):
+                used.add(j)
+                used.add(k)
+                cx = (top_h[5] + bot_h[5]) / 2
+                cy = (top_h[6] + bot_h[6]) / 2
+                out.append(Head(cx, cy, tot_x0 - pad_x, tot_y0 - pad_y, tot_x1 + pad_x, tot_y1 + pad_y, 0.6, True))
+                break
     return out
 
 
 def _on_beam(beams: np.ndarray, h: "Head") -> bool:
-    y0, y1 = max(0, int(h.cy - 2)), min(beams.shape[0], int(h.cy + 3))
-    x0, x1 = max(0, int(h.cx - 2)), min(beams.shape[1], int(h.cx + 3))
+    y0, y1 = max(0, int(h.y0 - 2)), min(beams.shape[0], int(h.y1 + 3))
+    x0, x1 = max(0, int(h.x0 - 2)), min(beams.shape[1], int(h.x1 + 3))
     return bool((beams[y0:y1, x0:x1] > 0).any())
 
 
@@ -449,10 +481,10 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             if g is not None:
                 graces.append(g)
             return 1
-        acc = classify_accidental(c, sp)
+        acc = classify_accidental(c, sp) if staff.top - 2.5 * sp <= c.cy <= staff.bottom + 2.5 * sp else None
         acc_comp = c
         adv = 1
-        if acc is None and c_next is not None:
+        if acc is None and c_next is not None and staff.top - 2.5 * sp <= c.cy <= staff.bottom + 2.5 * sp:
             m = _try_merge_accidental(c, c_next, sp)
             if m is not None:
                 acc, acc_comp = m
