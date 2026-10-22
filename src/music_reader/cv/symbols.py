@@ -102,7 +102,7 @@ def find_heads(c: Comp, sp: float) -> list[Head]:
                 heads.append(Head(c.x0 + x + w / 2 - pad, c.y0 + (ya + yb) / 2 - pad, c.x0 + x - pad, c.y0 + ya - pad,
                                   c.x0 + x + w - pad, c.y0 + yb - pad, ink, ink < 0.8))
             continue
-        if not (0.4 * sp * sp <= a <= 2.4 * sp * sp and 0.7 * sp <= w <= 2.0 * sp and 0.6 * sp <= h <= 1.7 * sp):
+        if not (0.55 * sp * sp <= a <= 2.4 * sp * sp and 0.75 * sp <= w <= 2.0 * sp and 0.75 * sp <= h <= 1.7 * sp):
             continue
         region = (lab == i).astype(np.uint8)
         if not _head_like_orientation(region):
@@ -124,7 +124,7 @@ def _head_like_orientation(region: np.ndarray) -> bool:
     if l2 <= 0 or np.sqrt(l1 / l2) <= 1.4:
         return True
     theta = 0.5 * np.degrees(np.arctan2(2 * mu11, mu20 - mu02))
-    return abs(theta) <= 40.0
+    return abs(theta) <= 55.0
 
 
 def _solidity(region: np.ndarray) -> float:
@@ -214,15 +214,41 @@ def strokes(c: Comp, frac: float = 0.55):
 
 def classify_accidental(c: Comp, sp: float) -> Optional[str]:
     # shorter than a note with stem, whose head+stem is taller (the bowl of a flat looks like a head)
-    if not (1.6 * sp <= c.h <= 3.0 * sp and 0.5 * sp <= c.w <= 1.8 * sp):
+    if not (1.6 * sp <= c.h <= 3.6 * sp and 0.5 * sp <= c.w <= 1.8 * sp):
         return None
     st = strokes(c)
     if len(st) >= 2 and all(r >= 0.8 * c.h for _, r in st[:2]):
         return "#"
     if len(st) >= 2 and all(0.45 * c.h <= r < 0.82 * c.h for _, r in st[:2]):
         return "n"
-    if len(st) == 1 and st[0][1] >= 0.7 * c.h and st[0][0] < 0.5 * c.w and c.w <= 1.5 * sp:
-        return "b"
+    if len(st) == 1 and st[0][1] >= 0.7 * c.h and st[0][0] <= 0.38 * c.w and c.w <= 1.5 * sp:
+        top_right = c.mask[:max(1, int(0.5 * c.h)), max(1, int(0.35 * c.w)):]
+        if not top_right.any() or int(top_right.sum()) <= 1:
+            return "b"
+    return None
+
+
+def _merge_comps(c1: Comp, c2: Comp) -> Comp:
+    x0, y0 = min(c1.x0, c2.x0), min(c1.y0, c2.y0)
+    x1, y1 = max(c1.x1, c2.x1), max(c1.y1, c2.y1)
+    mask = np.zeros((y1 - y0, x1 - x0), dtype=bool)
+    mask[c1.y0 - y0 : c1.y1 - y0, c1.x0 - x0 : c1.x1 - x0] |= c1.mask
+    mask[c2.y0 - y0 : c2.y1 - y0, c2.x0 - x0 : c2.x1 - x0] |= c2.mask
+    return Comp(c1.id, x0, y0, x1, y1, int(mask.sum()), mask)
+
+
+def _try_merge_accidental(c1: Comp, c2: Comp, sp: float) -> Optional[tuple[str, Comp]]:
+    if not (0 <= c2.x0 - c1.x1 <= 0.6 * sp):
+        return None
+    if not (0.5 * sp <= (c2.x1 - c1.x0) <= 1.8 * sp):
+        return None
+    ov = min(c1.y1, c2.y1) - max(c1.y0, c2.y0)
+    if ov < 0.4 * min(c1.h, c2.h):
+        return None
+    merged = _merge_comps(c1, c2)
+    acc = classify_accidental(merged, sp)
+    if acc in ("#", "b", "n"):
+        return acc, merged
     return None
 
 
@@ -316,13 +342,19 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
         if _read_time_block(tail, idx, last_x1, staff) is not None:
             break  # a narrow digit (1) looks like a flat; what follows reads as a time signature
         kind = classify_accidental(c, sp)
+        advance = 1
+        if kind is None and idx + 1 < len(tail):
+            m = _try_merge_accidental(c, tail[idx + 1], sp)
+            if m is not None:
+                kind, c = m
+                advance = 2
         if kind in ("#", "b"):
-            nxt = tail[idx + 1] if idx + 1 < len(tail) else None
+            nxt = tail[idx + advance] if idx + advance < len(tail) else None
             if nxt is not None and not looks_like_time(nxt) and heads_of(nxt) and nxt.x0 - c.x1 <= 1.5 * sp:
                 break  # belongs to the first note, not to the key signature
             key_accs.append((kind, c))
             _mark(res, "key", c.bbox, kind)
-            last_x1, idx = c.x1, idx + 1
+            last_x1, idx = c.x1, idx + advance
             continue
         break
     if key_accs:
@@ -388,54 +420,72 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
     tri_digits: list[Comp] = []
     tri_brackets: list[Comp] = []
 
-    def other(c):
-        """A component that holds no note head: accidental, dot, tie, rest, grace note or leftover."""
+    def other(c, c_next=None):
+        """A component that holds no note head: accidental, dot, tie, rest, grace note or leftover.
+        Returns the number of components consumed (1 or 2)."""
         gh = find_grace_head(c, sp) if _classify_rest(c, staff) is None else None  # an eighth rest has a filled dot too
         if gh is not None:
             g = _grace_item(staff, c, gh, base, ledgers, res)
             if g is not None:
                 graces.append(g)
-            return
+            return 1
         acc = classify_accidental(c, sp)
+        acc_comp = c
+        adv = 1
+        if acc is None and c_next is not None:
+            m = _try_merge_accidental(c, c_next, sp)
+            if m is not None:
+                acc, acc_comp = m
+                adv = 2
         if acc:
-            accs.append((acc, c))
-            return
+            accs.append((acc, acc_comp))
+            return adv
         if _is_dot(c, sp):
             dots.append(c)
-            return
+            return 1
         if _is_tie(c, sp):
             ties.append(c)
-            return
+            return 1
         r = _classify_rest(c, staff)
         if r is not None:
             kind, dur = r
             res.items.append(Item("rest", c.cx, c.bbox, 0.7, c.id, duration=dur, notes=[kind]))
             _mark(res, "rest", c.bbox, kind, 0.7)
-            return
+            return 1
         if c.w >= 0.3 * sp and c.h <= 1.3 * sp and c.w >= 1.2 * c.h:
             frags.append(c)  # maybe a piece of a tie/slur that a staff line cut apart
-            return
+            return 1
         if staff.top - 0.2 * sp <= c.cy <= staff.bottom + 0.2 * sp and c.h >= 0.8 * sp:
             diag("UNCLASSIFIED_SYMBOL", "info", f"unrecognised symbol {c.w / sp:.1f}x{c.h / sp:.1f} sp", c)
             _mark(res, "unknown", c.bbox, "?", 0.0)
-    for c in content:
+        return 1
+
+    c_idx = 0
+    while c_idx < len(content):
+        c = content[c_idx]
         heads = comp_heads[c.id]
         if heads:
             for h in heads:
                 it = _make_note(staff, c, h, base, ledgers, res, src)
                 if it is not None:
                     notes.append(it)
+            c_idx += 1
             continue
         if any(hh.x0 - 0.2 * sp <= c.x0 and c.x1 <= hh.x1 + 0.2 * sp and hh.y0 - 0.2 * sp <= c.y0 and c.y1 <= hh.y1 + 0.2 * sp
                for hh in standalone):
+            c_idx += 1
             continue  # a fragment of a hollow head's broken ring
         if _is_three(c, staff):
             tri_digits.append(c)  # maybe the 3 of a triplet: decided once the notes are known
+            c_idx += 1
             continue
         if _is_straight_stroke(c, sp):
             tri_brackets.append(c)  # maybe a triplet bracket (a tie is curved)
+            c_idx += 1
             continue
-        other(c)
+        c_next = content[c_idx + 1] if c_idx + 1 < len(content) else None
+        consumed = other(c, c_next)
+        c_idx += consumed
     for h in standalone:
         it = _make_note(staff, None, h, base, ledgers, res, src)
         if it is not None:

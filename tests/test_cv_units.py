@@ -153,3 +153,60 @@ def test_system_crops_follow_the_ink_in_tight_layouts():
     assert second[1] > 178                           # ... and not repeated at the top of the second
     assert second[1] <= 200 - 14 + 1                 # the second crop still starts above its clef
     assert first[1] > 70                             # the prose above stays out
+
+def test_classify_accidental_proportions_and_split_merging():
+    from music_reader.cv.symbols import Comp, classify_accidental, _try_merge_accidental
+    sp = 10.0
+    h = 32  # 3.2 sp tall sharp
+    w = 8
+    mask = np.zeros((h, w), dtype=bool)
+    mask[:, 1:3] = True
+    mask[:, 5:7] = True
+    mask[8:12, :] = True
+    mask[20:24, :] = True
+    c = Comp(1, 10, 10, 10 + w, 10 + h, int(mask.sum()), mask)
+    assert classify_accidental(c, sp) == "#"
+
+    # Non-flat with top-right ink (e.g. digit 4 or 3) should not be classified as flat
+    mask_digit = np.zeros((26, 12), dtype=bool)
+    mask_digit[:, 1:3] = True
+    mask_digit[2:8, 4:10] = True
+    mask_digit[14:24, 2:10] = True
+    c_digit = Comp(2, 10, 10, 22, 36, int(mask_digit.sum()), mask_digit)
+    assert classify_accidental(c_digit, sp) is None
+
+    # Split sharp components merge into #
+    left_mask = np.zeros((32, 3), dtype=bool)
+    left_mask[:, 1:3] = True
+    c_left = Comp(3, 10, 10, 13, 42, int(left_mask.sum()), left_mask)
+
+    right_mask = np.zeros((32, 4), dtype=bool)
+    right_mask[:, 1:3] = True
+    c_right = Comp(4, 15, 10, 19, 42, int(right_mask.sum()), right_mask)
+
+    res = _try_merge_accidental(c_left, c_right, sp)
+    assert res is not None
+    assert res[0] == "#"
+
+    # Split flat (stem + bowl fragment)
+    stem_mask = np.zeros((27, 3), dtype=bool)
+    stem_mask[:, 0:2] = True
+    c_stem = Comp(5, 10, 10, 13, 37, int(stem_mask.sum()), stem_mask)
+
+    bowl_mask = np.zeros((12, 7), dtype=bool)
+    bowl_mask[:, :] = True
+    c_bowl = Comp(6, 14, 25, 21, 37, int(bowl_mask.sum()), bowl_mask)
+
+    res_flat = _try_merge_accidental(c_stem, c_bowl, sp)
+    assert res_flat is not None
+    assert res_flat[0] == "b"
+
+
+def test_head_like_orientation_accepts_tilted_heads():
+    import cv2
+    from music_reader.cv.symbols import _head_like_orientation
+    # Create an ellipse tilted at 45 degrees
+    region = np.zeros((40, 40), dtype=np.uint8)
+    cv2.ellipse(region, (20, 20), (10, 6), 45, 0, 360, 255, -1)
+    assert _head_like_orientation(region)
+
