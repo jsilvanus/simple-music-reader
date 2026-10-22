@@ -210,3 +210,42 @@ def test_head_like_orientation_accepts_tilted_heads():
     cv2.ellipse(region, (20, 20), (10, 6), 45, 0, 360, 255, -1)
     assert _head_like_orientation(region)
 
+
+
+def test_find_holes_accepts_tilted_hollow_head():
+    import cv2
+    from music_reader.cv.symbols import find_holes
+    sp = 10.0
+    bw = np.zeros((100, 100), dtype=np.uint8)
+    # Ring of a hollow notehead tilted at 35 degrees
+    cv2.ellipse(bw, (50, 50), (6, 4), 35, 0, 360, 255, 2)
+    holes = find_holes(bw, sp)
+    assert len(holes) == 1
+    assert abs(holes[0].cx - 50) <= 1.0
+    assert abs(holes[0].cy - 50) <= 1.0
+
+
+def test_flag_hole_rejected_on_stem_with_solid_head():
+    from music_reader.cv.staff import Staff
+    from music_reader.cv.symbols import analyze_staff, Comp, Head
+    sp = 10.0
+    staff = Staff([40.0, 50.0, 60.0, 70.0, 80.0], 0, 200, sp, 1.0)
+    clef_comp = Comp(1, 10, 40, 25, 80, 600, np.ones((40, 15), dtype=bool))
+    # An eighth note stem with a solid head at bottom and a flag loop hole at top
+    stem_mask = np.zeros((30, 14), dtype=bool)
+    stem_mask[:, 10:13] = True
+    stem_mask[20:30, 0:12] = True
+    stem_comp = Comp(10, 100, 45, 114, 75, int(stem_mask.sum()), stem_mask)
+    solid_head = Head(105.0, 70.0, 100.0, 65.0, 110.0, 75.0, 1.0, False)
+    flag_hole = Head(111.0, 48.0, 108.0, 45.0, 114.0, 51.0, 0.6, True)
+
+    import music_reader.cv.symbols as cvsym
+    orig_find_heads = cvsym.find_heads
+    try:
+        cvsym.find_heads = lambda c, sp: [solid_head] if c.id == stem_comp.id else []
+        r = analyze_staff(staff, [clef_comp, stem_comp], [], 1, 0, [flag_hole], None, 'top')
+        notes = [it for it in r.items if it.kind == 'note']
+        assert len(notes) == 1
+        assert not notes[0].hollow
+    finally:
+        cvsym.find_heads = orig_find_heads

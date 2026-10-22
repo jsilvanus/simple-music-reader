@@ -148,7 +148,7 @@ def find_holes(bw: np.ndarray, sp: float) -> list[Head]:
         x, y, w, h, a = (int(v) for v in stats[i])
         if not (0.2 * sp * sp <= a <= 0.9 * sp * sp and 0.5 * sp <= w <= 1.3 * sp and 0.25 * sp <= h <= 0.8 * sp):
             continue
-        if not 0.55 <= a / (w * h) <= 0.9:
+        if not 0.48 <= a / (w * h) <= 0.9:
             continue
         if _solidity(lab[y : y + h, x : x + w] == i) < 0.88:
             continue  # the pocket between two heads, a head and a stem or a beam is concave; the inside of a ring is not
@@ -325,10 +325,13 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
 
     def heads_of(c):
         if c.id not in heads_cache:
-            found = find_heads(c, sp)
-            if beams is not None:  # a blob where a stem meets a beam (and a staff line crosses it) is not a head
-                found = [h for h in found if not _on_beam(beams, h)]
-            heads_cache[c.id] = found
+            if classify_accidental(c, sp):
+                heads_cache[c.id] = []
+            else:
+                found = find_heads(c, sp)
+                if beams is not None:  # a blob where a stem meets a beam (and a staff line crosses it) is not a head
+                    found = [h for h in found if not _on_beam(beams, h)]
+                heads_cache[c.id] = found
         return heads_cache[c.id]
 
     def looks_like_time(c):
@@ -337,6 +340,9 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
     key_accs, last_x1, idx = [], header_end, 0
     while idx < len(tail):
         c = tail[idx]
+        if c.cy < staff.top - 1.2 * sp or c.cy > staff.bottom + 1.2 * sp:
+            idx += 1
+            continue
         if c.x0 - last_x1 > 3.0 * sp:
             break
         if _read_time_block(tail, idx, last_x1, staff) is not None:
@@ -375,11 +381,20 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             res.time_sig_seen, res.time_signature, res.time_signature_confidence = True, text, conf
             _mark(res, "time", bbox, label, conf)
             idx += used
-        elif s0.x0 - header_end <= 3.0 * sp and looks_like_time(s0):
-            res.time_sig_seen = True  # two touching digits whose reading failed
-            _mark(res, "time", s0.bbox, "time signature (digits not read)")
-            header_end = s0.x1
-            idx += 1
+        else:
+            cluster = _time_cluster(tail, idx, header_end, staff)
+            if cluster:
+                res.time_sig_seen = True
+                bx0, by0 = min(c.x0 for c in cluster), min(c.y0 for c in cluster)
+                bx1, by1 = max(c.x1 for c in cluster), max(c.y1 for c in cluster)
+                _mark(res, "time", (bx0, by0, bx1, by1), "time signature (digits not read)")
+                header_end = bx1
+                idx = tail.index(cluster[-1]) + 1
+            elif s0.x0 - header_end <= 3.0 * sp and looks_like_time(s0):
+                res.time_sig_seen = True  # two touching digits whose reading failed
+                _mark(res, "time", s0.bbox, "time signature (digits not read)")
+                header_end = s0.x1
+                idx += 1
     if res.time_signature is None and idx + 1 < len(tail):
         a, b = tail[idx], tail[idx + 1]
         if (a.x0 - header_end <= 3.0 * sp and 1.2 * sp <= a.h <= 2.7 * sp and 1.2 * sp <= b.h <= 2.7 * sp
@@ -410,10 +425,15 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             continue
         owners = [c for c in content if c.x0 - 0.5 * sp <= hole.cx <= c.x1 + 0.5 * sp and c.y0 - 0.5 * sp <= hole.cy <= c.y1 + 0.5 * sp]
         owner = max(owners, key=lambda c: c.area, default=None)
-        if owner is not None and classify_accidental(owner, sp):
-            continue  # the bowl of a flat sign, not a note head
-        if owner is not None and owner.h >= 1.5 * sp:
-            comp_heads[owner.id].append(hole)
+        if owner is not None:
+            if classify_accidental(owner, sp):
+                continue  # the bowl of a flat sign, not a note head
+            if any(not h.hollow for h in comp_heads[owner.id]):
+                continue  # stem already has a solid head; cannot also hold a hollow head
+            if owner.h >= 1.5 * sp:
+                comp_heads[owner.id].append(hole)
+            else:
+                standalone.append(hole)
         else:
             standalone.append(hole)
     graces: list[Item] = []
@@ -578,13 +598,22 @@ def _time_cluster(tail: list[Comp], idx: int, header_end: float, staff: Staff) -
     def fits(c):
         return c.y0 >= lo and c.y1 <= hi and c.w <= 2.4 * sp and c.h <= 4.6 * sp
 
+    while idx < len(tail) and (tail[idx].cy < lo or tail[idx].cy > hi):
+        idx += 1
     if idx >= len(tail) or tail[idx].x0 - header_end > 3.0 * sp or not fits(tail[idx]):
         return []
     cluster = [tail[idx]]
     k = idx + 1
-    while k < len(tail) and fits(tail[k]) and tail[k].x0 - max(c.x1 for c in cluster) <= 0.5 * sp:
-        cluster.append(tail[k])
-        k += 1
+    while k < len(tail):
+        c = tail[k]
+        if c.cy < lo or c.cy > hi:
+            k += 1
+            continue
+        if fits(c) and c.x0 - max(x.x1 for x in cluster) <= 0.5 * sp:
+            cluster.append(c)
+            k += 1
+        else:
+            break
     # drop trailing components (a note after the time signature) until the rest is as tall as two digits, around the middle line
     while cluster:
         y0, y1 = min(c.y0 for c in cluster), max(c.y1 for c in cluster)

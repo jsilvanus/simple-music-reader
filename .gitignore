@@ -10,3 +10,5 @@ debug/
 tests/corpus/*.pdf
 tests/corpus/*.jpg
 tests/corpus/*.png
+
+virsikirja_comparison.json
