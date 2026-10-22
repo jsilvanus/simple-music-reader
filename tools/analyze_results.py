@@ -1,4 +1,5 @@
 import json
+import numpy as np
 
 with open("virsikirja_comparison.json", "r", encoding="utf-8") as f:
     data = json.load(f)
@@ -12,25 +13,38 @@ print(f"Evaluated (both audio & score): {len(evaluated)}")
 print(f"Skipped: {len(skipped)}")
 print(f"Exceptions: {len(errors)}")
 
+sims = [r["similarity"] for r in evaluated]
+print(f"\nMean similarity: {np.mean(sims):.3f}")
+print(f"Median similarity: {np.median(sims):.3f}")
+
+# Group by 0.10 gaps
+bins = [
+    (0.00, 0.10),
+    (0.10, 0.20),
+    (0.20, 0.30),
+    (0.30, 0.40),
+    (0.40, 0.50),
+    (0.50, 0.60),
+    (0.60, 0.70),
+    (0.70, 0.80),
+    (0.80, 0.90),
+    (0.90, 1.001),
+]
+
+print("\n--- Similarity Distribution (0.10 Bins) ---")
+for lo, hi in bins:
+    label = f"{lo:.2f} - {1.00 if hi > 1.0 else hi:.2f}"
+    count = sum(1 for s in sims if lo <= s < hi) if hi <= 1.0 else sum(1 for s in sims if lo <= s <= 1.0)
+    pct = count / len(evaluated) * 100
+    bar = "#" * int(round(pct / 2))
+    print(f"  {label}: {count:3d} ({pct:5.1f}%) | {bar}")
+
 under_03 = [r for r in evaluated if r["similarity"] < 0.3]
-under_05 = [r for r in evaluated if 0.3 <= r["similarity"] < 0.5]
-between_05_07 = [r for r in evaluated if 0.5 <= r["similarity"] < 0.7]
-between_07_08 = [r for r in evaluated if 0.7 <= r["similarity"] < 0.8]
-between_08_09 = [r for r in evaluated if 0.8 <= r["similarity"] < 0.9]
-above_09 = [r for r in evaluated if r["similarity"] >= 0.9]
+print(f"\n--- Hymns under 0.30 (Count: {len(under_03)}) ---")
+for r in sorted(under_03, key=lambda x: x["similarity"]):
+    print(f"  {r['hymn']}: sim={r['similarity']} audio_n={r['audio_notes']} score_n={r['score_notes']} key={r['key_fifths']:+d} errs={r['errors']}")
 
-print("\n--- Similarity Distribution ---")
-print(f"  < 0.30:    {len(under_03):3d}  ({len(under_03)/len(evaluated)*100:4.1f}%)")
-print(f"  0.30-0.50: {len(under_05):3d}  ({len(under_05)/len(evaluated)*100:4.1f}%)")
-print(f"  0.50-0.70: {len(between_05_07):3d}  ({len(between_05_07)/len(evaluated)*100:4.1f}%)")
-print(f"  0.70-0.80: {len(between_07_08):3d}  ({len(between_07_08)/len(evaluated)*100:4.1f}%)")
-print(f"  0.80-0.90: {len(between_08_09):3d}  ({len(between_08_09)/len(evaluated)*100:4.1f}%)")
-print(f"  >= 0.90:   {len(above_09):3d}  ({len(above_09)/len(evaluated)*100:4.1f}%)")
-
-print(f"\n--- ALL hymns under 0.30 (Count: {len(under_03)}) ---")
-for r in under_03:
-    print(f"  {r['hymn']}: sim={r['similarity']} audio_n={r['audio_notes']} score_n={r['score_notes']} key={r['key_fifths']:+d} errs={r['errors']} warns={r['warnings']}")
-
-print(f"\n--- Lowest 15 hymns between 0.30 and 0.50 ---")
-for r in sorted(under_05, key=lambda x: x["similarity"])[:15]:
+under_05 = [r for r in evaluated if 0.30 <= r["similarity"] < 0.50]
+print(f"\n--- Lowest 10 hymns between 0.30 and 0.50 (Count: {len(under_05)}) ---")
+for r in sorted(under_05, key=lambda x: x["similarity"])[:10]:
     print(f"  {r['hymn']}: sim={r['similarity']} audio_n={r['audio_notes']} score_n={r['score_notes']} key={r['key_fifths']:+d} errs={r['errors']}")
