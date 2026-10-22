@@ -150,7 +150,7 @@ def find_holes(bw: np.ndarray, sp: float) -> list[Head]:
     for i in range(1, n):
         x, y, w, h, a = (int(v) for v in stats[i])
         if (0.2 * sp * sp <= a <= 0.9 * sp * sp and 0.5 * sp <= w <= 1.3 * sp and 0.25 * sp <= h <= 0.8 * sp):
-            if 0.48 <= a / (w * h) <= 0.9 and _solidity(lab[y : y + h, x : x + w] == i) >= 0.88:
+            if 0.48 <= a / (w * h) <= 0.9 and _solidity(lab[y : y + h, x : x + w] == i) >= 0.85:
                 out.append(Head(float(cents[i][0]), float(cents[i][1]), x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y, 0.6, True))
                 continue
         # Split half-hole cut by a staff line
@@ -377,7 +377,7 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
             continue
         if c.x0 - last_x1 > 3.0 * sp:
             break
-        if _read_time_block(tail, idx, last_x1, staff) is not None:
+        if not key_accs and _read_time_block(tail, idx, last_x1, staff) is not None:
             break  # a narrow digit (1) looks like a flat; what follows reads as a time signature
         kind = classify_accidental(c, sp)
         advance = 1

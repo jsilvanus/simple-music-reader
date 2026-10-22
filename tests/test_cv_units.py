@@ -278,3 +278,47 @@ def test_on_beam_rejects_junction_blob_touching_beam():
     # A junction blob from stem at x=50, y=25..34 (cy=29.5)
     blob_head = Head(50.0, 29.5, 46.0, 25.0, 54.0, 34.0, 1.0, False)
     assert _on_beam(beams, blob_head)
+
+
+def test_find_holes_accepts_tilted_discrete_ellipse():
+    from music_reader.cv.symbols import find_holes
+    import cv2
+    sp = 11.0
+    bw = np.zeros((50, 50), dtype=np.uint8)
+    # Hollow ink ring (255) around a white center hole (0)
+    cv2.ellipse(bw, (25, 25), (7, 5), 30, 0, 360, 255, 2)
+    holes = find_holes(bw, sp)
+    assert len(holes) == 1
+    assert abs(holes[0].cx - 25) <= 1.5
+
+
+def test_key_accs_not_interrupted_by_broken_sharp():
+    from music_reader.cv.symbols import analyze_staff, Comp
+    from types import SimpleNamespace as NS
+    sp = 10.0
+    staff = NS(index=0, lines=[20.0, 30.0, 40.0, 50.0, 60.0], spacing=10.0, top=20.0, bottom=60.0, x0=10.0, x1=300.0, uid=0, thickness=1.5, height=40.0)
+    # Clef
+    clef = Comp(0, 15, 10, 35, 70, 400, np.ones((60, 20), bool))
+    # Sharp 1 (F#)
+    sharp1 = Comp(1, 45, 15, 55, 45, 150, np.ones((30, 10), bool))
+    # Sharp 2 split into two pieces (e.g. C#)
+    sharp2_left = Comp(2, 60, 25, 62, 55, 60, np.ones((30, 2), bool))
+    sharp2_right = Comp(3, 63, 25, 68, 55, 100, np.ones((30, 5), bool))
+    # Note
+    note = Comp(4, 90, 35, 92, 65, 80, np.ones((30, 2), bool))
+
+    # Test analyze_staff detects key_fifths=2 instead of stopping at 1
+    import music_reader.cv.symbols as cvsym
+    orig_classify = cvsym.classify_accidental
+    try:
+        def mock_classify(c, sp):
+            if c.id == 1:
+                return '#'
+            if c.w >= 7 and c.h >= 25:
+                return '#'
+            return None
+        cvsym.classify_accidental = mock_classify
+        r = analyze_staff(staff, [clef, sharp1, sharp2_left, sharp2_right, note], [], 1, 0, [], None, 'top')
+        assert r.key_fifths == 2
+    finally:
+        cvsym.classify_accidental = orig_classify
