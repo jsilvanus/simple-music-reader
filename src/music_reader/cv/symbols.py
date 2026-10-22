@@ -337,7 +337,7 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
 
     # ---- header: clef, key signature, time signature -------------------------------
     header_end = float(staff.x0)
-    clef = next((c for c in rest if c.x0 < staff.x0 + 8 * sp and c.h >= 2.2 * sp and c.w >= 0.8 * sp), None)
+    clef = next((c for c in rest if c.x0 < staff.x0 + 8 * sp and c.h >= 2.2 * sp and 0.8 * sp <= c.w <= 3.5 * sp), None)
     if clef is None:
         diag("CLEF_MISSING", "warning", "no clef found at the start of the staff; treble clef assumed")
     else:
@@ -445,7 +445,8 @@ def analyze_staff(staff: Staff, comps: list[Comp], ledgers: list[Ledger], page: 
     ties: list[Comp] = []
     frags: list[Comp] = []
     # hollow heads found as enclosed white regions, attached to the component that holds their stem
-    my_holes = [h for h in (holes or []) if staff.top - 5 * sp <= h.cy <= staff.bottom + 5 * sp and h.cx > header_end and not any(abs(h.cx - b.cx) <= 0.6 * sp for b in bars if b.h >= 2.5 * sp)]
+    double_bars = [(min(b1.x0, b2.x0), max(b1.x1, b2.x1)) for i, b1 in enumerate(bars) for b2 in bars[i + 1:] if abs(b1.cx - b2.cx) <= 1.2 * sp]
+    my_holes = [h for h in (holes or []) if staff.top - 5 * sp <= h.cy <= staff.bottom + 5 * sp and h.cx > header_end and not any(x0 - 0.2 * sp <= h.cx <= x1 + 0.2 * sp for x0, x1 in double_bars)]
     comp_heads: dict[int, list[Head]] = {c.id: ([] if classify_accidental(c, sp) else list(heads_of(c))) for c in content}
     standalone: list[Head] = []
     for hole in my_holes:
@@ -904,7 +905,7 @@ def _triplet_groups(items: list[Item], digits: list[Comp], brackets: list[Comp],
             boxes = [it.bbox for k in range(i, i + 3) for it in columns[k]]
             top, bottom = min(b[1] for b in boxes), max(b[3] for b in boxes)
             gap = (top - d.cy) if d.cy < top else (d.cy - bottom) if d.cy > bottom else None
-            if gap is None or gap < 0.3 * sp or gap > 6.5 * sp:
+            if gap is None or gap < 0.3 * sp or gap > 3.0 * sp:
                 continue
             if best is None or off < best[0]:
                 best = (off, i)
